@@ -110,7 +110,7 @@ public class AgentService(
             var result = await aiChatService.SendAsync(profile, messages, cancellationToken);
             if (result.Error is not null)
             {
-                logs.AppendLine($"- **Error:** Provider error: {result.Error}");
+                logs.AppendLine($"- **Error:** LLM error: {result.Error}");
                 finalAnswer = $"Error: {result.Error}";
                 break;
             }

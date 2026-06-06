@@ -50,7 +50,7 @@
 
                 <Border Width="44" Height="44" CornerRadius="8" BorderBrush="{StaticResource ArgusBorderBrush}" BorderThickness="1" Background="#3310F7FF">
                     <Grid>
-                        <TextBlock Text="AR" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource ArgusTextBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <Image Source="Assets/ArgusMark.png" Width="40" Height="40" Stretch="Uniform" />
                     </Grid>
                 </Border>
 
@@ -606,10 +606,10 @@
             <Grid Visibility="{Binding CurrentView, Converter={StaticResource ViewVisibilityConverter}, ConverterParameter=Settings}">
                 <ScrollViewer>
                     <StackPanel Spacing="14" MaxWidth="600">
-                        <TextBlock Text="AI PROVIDER" Style="{StaticResource PanelTitleStyle}" FontSize="18" />
+                        <TextBlock Text="LLM CONNECTION" Style="{StaticResource PanelTitleStyle}" FontSize="18" />
                         <Border Padding="14" CornerRadius="8" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource ArgusMutedBorderBrush}" BorderThickness="1">
                             <StackPanel Spacing="8">
-                                <TextBlock Text="Provider" Style="{StaticResource MetaTextStyle}" />
+                                <TextBlock Text="LLM service" Style="{StaticResource MetaTextStyle}" />
                                 <ComboBox ItemsSource="{Binding ProviderProfiles}" SelectedItem="{Binding SelectedProvider, Mode=TwoWay}">
                                     <ComboBox.ItemTemplate>
                                         <DataTemplate>
@@ -652,7 +652,7 @@
                                 <TextBox Header="Webhook URL" PlaceholderText="https://example.com/telegram" Text="{Binding TelegramWebhookUrl, Mode=TwoWay}" />
                                 <TextBox Header="Webhook Port" Text="{Binding TelegramWebhookPort, Mode=TwoWay}" />
                                 <ToggleSwitch Header="Show Agent Thinking in Telegram" IsOn="{Binding ShowThinkingInTelegram, Mode=TwoWay}" />
-                                <ToggleSwitch Header="Show Provider Thinking in App" IsOn="{Binding ShowThinkingInApp, Mode=TwoWay}" />
+                                <ToggleSwitch Header="Show LLM Thinking in App" IsOn="{Binding ShowThinkingInApp, Mode=TwoWay}" />
                                 <Button Command="{Binding SaveSystemSettingsCommand}" HorizontalAlignment="Left">Save Gateway Settings</Button>
                                 <TextBlock Text="{Binding TelegramGatewayLogsText}" Style="{StaticResource MetaTextStyle}" FontFamily="Cascadia Code" TextWrapping="WrapWholeWords" MaxLines="6" />
                             </StackPanel>
@@ -769,7 +769,7 @@
                         <StackPanel Width="220" Spacing="10" Padding="4">
                             <TextBlock Text="MODEL CONFIGURATION" Style="{StaticResource PanelTitleStyle}" FontSize="12" Margin="0,0,0,4" />
                             <StackPanel Spacing="3">
-                                <TextBlock Text="Provider" Style="{StaticResource MetaTextStyle}" FontSize="10" />
+                                <TextBlock Text="LLM service" Style="{StaticResource MetaTextStyle}" FontSize="10" />
                                 <ComboBox ItemsSource="{Binding ProviderProfiles}" SelectedItem="{Binding SelectedProvider, Mode=TwoWay}" HorizontalAlignment="Stretch">
                                     <ComboBox.ItemTemplate>
                                         <DataTemplate>

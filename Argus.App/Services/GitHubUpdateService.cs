@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace Argus.App.Services;
@@ -10,7 +11,8 @@ public sealed record AppUpdateInfo(
     string Name,
     string Notes,
     Uri ReleasePageUri,
-    Uri InstallerUri);
+    Uri InstallerUri,
+    string? InstallerSha256);
 
 public interface IAppUpdateService
 {
@@ -46,6 +48,7 @@ public sealed class GitHubUpdateService(HttpClient httpClient) : IAppUpdateServi
         }
 
         Uri? installerUri = null;
+        string? installerSha256 = null;
         if (root.TryGetProperty("assets", out var assets))
         {
             foreach (var asset in assets.EnumerateArray())
@@ -60,6 +63,14 @@ public sealed class GitHubUpdateService(HttpClient httpClient) : IAppUpdateServi
                 var downloadUrl = asset.GetProperty("browser_download_url").GetString();
                 if (Uri.TryCreate(downloadUrl, UriKind.Absolute, out installerUri))
                 {
+                    var digest = asset.TryGetProperty("digest", out var digestProperty)
+                        ? digestProperty.GetString()
+                        : null;
+                    if (digest?.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase) == true)
+                    {
+                        installerSha256 = digest["sha256:".Length..].Trim();
+                    }
+
                     break;
                 }
             }
@@ -77,7 +88,8 @@ public sealed class GitHubUpdateService(HttpClient httpClient) : IAppUpdateServi
             root.GetProperty("name").GetString() ?? $"Argus v{version}",
             root.GetProperty("body").GetString() ?? "See the release page for details.",
             releasePageUri,
-            installerUri);
+            installerUri,
+            installerSha256);
     }
 
     public async Task DownloadAndLaunchInstallerAsync(
@@ -100,6 +112,18 @@ public sealed class GitHubUpdateService(HttpClient httpClient) : IAppUpdateServi
             await source.CopyToAsync(destination, cancellationToken);
         }
 
+        if (!string.IsNullOrWhiteSpace(update.InstallerSha256))
+        {
+            await using var installerStream = File.OpenRead(installerPath);
+            var actualHash = Convert.ToHexString(
+                await SHA256.HashDataAsync(installerStream, cancellationToken));
+            if (!actualHash.Equals(update.InstallerSha256, StringComparison.OrdinalIgnoreCase))
+            {
+                File.Delete(installerPath);
+                throw new InvalidDataException("The downloaded installer failed SHA-256 verification.");
+            }
+        }
+
         Process.Start(new ProcessStartInfo
         {
             FileName = installerPath,
@@ -110,6 +134,6 @@ public sealed class GitHubUpdateService(HttpClient httpClient) : IAppUpdateServi
 
     private static string GetCurrentVersion()
     {
-        return typeof(GitHubUpdateService).Assembly.GetName().Version?.ToString(3) ?? "0.1.0";
+        return typeof(GitHubUpdateService).Assembly.GetName().Version?.ToString(3) ?? "0.1.1";
     }
 }

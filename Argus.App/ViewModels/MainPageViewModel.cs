@@ -74,7 +74,7 @@ public partial class MainPageViewModel(
     public partial string UpdateStatusText { get; set; } = "Checking for updates...";
 
     [ObservableProperty]
-    public partial string UpdateReleaseNotes { get; set; } = "Argus checks GitHub Releases for signed release metadata.";
+    public partial string UpdateReleaseNotes { get; set; } = "Argus checks GitHub Releases and verifies the installer SHA-256 digest before launch.";
 
     [ObservableProperty]
     public partial bool IsUpdateAvailable { get; set; }
@@ -120,7 +120,7 @@ public partial class MainPageViewModel(
     public partial string StatusText { get; set; } = "Local SQLite memory is ready.";
 
     [ObservableProperty]
-    public partial string SettingsStatus { get; set; } = "Provider keys are stored with Windows Credential Locker.";
+    public partial string SettingsStatus { get; set; } = "LLM credentials are stored with Windows Credential Locker.";
 
     [ObservableProperty]
     public partial string ContextTrackerText { get; set; } = "0/unknown";
@@ -923,7 +923,7 @@ public partial class MainPageViewModel(
                 ChatMessages.Remove(thinkingMessage);
             }
 
-            var assistantText = result.Error is not null ? $"Provider error: {result.Error}" : result.Content;
+            var assistantText = result.Error is not null ? $"LLM error: {result.Error}" : result.Content;
             var assistantMessage = await conversationService.AddMessageAsync(conversationId, "assistant", assistantText, linkedNodeId);
             ChatMessages.Add(assistantMessage);
             await PersistChatMessageAsMemoryNodeAsync(assistantMessage);
@@ -995,7 +995,7 @@ public partial class MainPageViewModel(
         var saved = await settingsService.SaveAiProviderProfileAsync(SelectedProvider);
         await LoadProvidersAsync(saved.Id);
         await LoadModelOptionsForSelectedProviderAsync(forceRefresh: false);
-        SettingsStatus = "Provider settings saved.";
+        SettingsStatus = "LLM settings saved.";
     }
 
     [RelayCommand]
@@ -1796,7 +1796,7 @@ public partial class MainPageViewModel(
             ContextTrackerDetailText = result is null
                 ? "Waiting for model usage."
                 : result.PromptTokens is null && estimatedPromptTokens > 0
-                ? "Provider usage unavailable; showing local prompt estimate."
+                ? "LLM usage unavailable; showing local prompt estimate."
                 : "Context window unknown for selected model.";
             return;
         }
@@ -1808,8 +1808,8 @@ public partial class MainPageViewModel(
         ContextTrackerDetailText = result is null
             ? "Waiting for model usage."
             : result.PromptTokens is null && estimatedPromptTokens > 0
-            ? "Provider usage unavailable; showing local prompt estimate."
-            : "Provider-reported prompt usage.";
+            ? "LLM usage unavailable; showing local prompt estimate."
+            : "LLM-reported prompt usage.";
     }
 
     private int? GetSelectedContextWindowTokens()
@@ -1855,7 +1855,7 @@ public partial class MainPageViewModel(
             new CommandPaletteItem("Go to Conversations", "View", "Open local conversations.", () => { CurrentView = "Conversations"; return Task.CompletedTask; }),
             new CommandPaletteItem("Go to Memories", "View", "Open local memory search.", () => { CurrentView = "Memories"; return Task.CompletedTask; }),
             new CommandPaletteItem("Go to Skills", "View", "Open skill integrations.", () => { CurrentView = "Skills"; return Task.CompletedTask; }),
-            new CommandPaletteItem("Go to Settings", "View", "Configure AI providers.", () => { CurrentView = "Settings"; return Task.CompletedTask; }),
+            new CommandPaletteItem("Go to Settings", "View", "Connect and configure LLMs.", () => { CurrentView = "Settings"; return Task.CompletedTask; }),
             new CommandPaletteItem("Create Node", "Graph", "Add a new idea node.", NewNodeAsync),
             new CommandPaletteItem("Create Edge", "Graph", "Connect selected node to target.", CreateEdgeAsync),
             new CommandPaletteItem("Save Selected Node", "Graph", "Persist inspector edits.", SaveSelectedNodeAsync),
@@ -1864,10 +1864,10 @@ public partial class MainPageViewModel(
             new CommandPaletteItem("Save Tags", "Graph", "Save comma-separated tags on the selected node.", SaveSelectedNodeTagsAsync),
             new CommandPaletteItem("Export Graph JSON", "Graph", "Copy graph JSON to the clipboard.", ExportGraphToClipboardAsync),
             new CommandPaletteItem("Import Graph JSON", "Graph", "Merge graph JSON from the clipboard.", ImportGraphFromClipboardAsync),
-            new CommandPaletteItem("Scan Projects Folder", "Projects", "Create/update project nodes from D:\\Projects.", ScanProjectsAsync),
-            new CommandPaletteItem("Summarize Project", "Projects", "Use the selected provider to summarize the selected project.", SummarizeSelectedProjectAsync),
+            new CommandPaletteItem("Scan Projects Folder", "Projects", "Create or update project nodes from your configured projects directory.", ScanProjectsAsync),
+            new CommandPaletteItem("Summarize Project", "Projects", "Use the selected LLM to summarize the selected project.", SummarizeSelectedProjectAsync),
             new CommandPaletteItem("Save Soul", "Persona", "Save the current Argus soul.md persona.", SaveSoulAsync),
-            new CommandPaletteItem("Test Provider Auth", "AI", "Send a small smoke-test request with the selected provider.", TestSelectedProviderAsync),
+            new CommandPaletteItem("Test LLM Connection", "AI", "Send a small smoke-test request with the selected LLM.", TestSelectedProviderAsync),
             new CommandPaletteItem("Search", "Search", "Run global node search.", SearchAsync),
             new CommandPaletteItem("Search Memories", "Memory", "Run local memory recall.", SearchMemoriesAsync),
             new CommandPaletteItem("New Conversation", "Chat", "Start a local conversation.", NewConversationAsync),

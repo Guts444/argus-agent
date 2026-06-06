@@ -6,6 +6,7 @@ namespace Argus.Data.Services;
 public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> dbContextFactory)
 {
     private const string DeepSeekDefaultsMigrationKey = "Migration:DeepSeekDefaults:v2";
+    private const string PublicSeedContentMigrationKey = "Migration:PublicSeedContent:v1";
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
@@ -97,6 +98,8 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
             SeedGraph(db);
         }
 
+        await UpgradePublicSeedContentAsync(db, cancellationToken);
+
         if (!await db.AppSettings.AnyAsync(setting => setting.Key == "DatabaseVersion", cancellationToken))
         {
             db.AppSettings.Add(new AppSetting { Key = "DatabaseVersion", Value = "1" });
@@ -162,6 +165,61 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
                 UpdatedAt = DateTimeOffset.UtcNow
             });
         }
+    }
+
+    private static async Task UpgradePublicSeedContentAsync(ArgusDbContext db, CancellationToken cancellationToken)
+    {
+        if (await db.AppSettings.AnyAsync(setting => setting.Key == PublicSeedContentMigrationKey, cancellationToken))
+        {
+            return;
+        }
+
+        const string oldWelcome =
+            "Argus is ready. Add nodes, connect projects, and configure an OpenAI-compatible provider when you want live chat.";
+        const string newWelcome =
+            "Argus is ready. Connect an LLM to chat, use tools, recall durable memory, and work with your graph and project context.";
+
+        var welcomeMessages = await db.Messages
+            .Where(message => message.Role == "assistant" && message.Content == oldWelcome)
+            .ToListAsync(cancellationToken);
+        foreach (var message in welcomeMessages)
+        {
+            message.Content = newWelcome;
+        }
+
+        var argusNode = await db.Nodes.FirstOrDefaultAsync(
+            node =>
+                node.Title == "Argus" &&
+                node.Summary == "Local-first AI command center" &&
+                node.Body == "Local-first AI command center",
+            cancellationToken);
+        if (argusNode is not null)
+        {
+            argusNode.Summary = "Local-first AI agent with durable memory and connected context";
+            argusNode.Body = argusNode.Summary;
+            argusNode.UpdatedAt = DateTimeOffset.UtcNow;
+        }
+
+        var providersNode = await db.Nodes.FirstOrDefaultAsync(
+            node =>
+                node.Title == "Model Providers" &&
+                node.Summary == "DeepSeek, OpenAI, OpenRouter, and custom endpoints" &&
+                node.Body == "DeepSeek, OpenAI, OpenRouter, and custom endpoints",
+            cancellationToken);
+        if (providersNode is not null)
+        {
+            providersNode.Title = "LLM Connections";
+            providersNode.Summary = "DeepSeek, OpenAI, OpenRouter, local LLMs, and custom endpoints";
+            providersNode.Body = providersNode.Summary;
+            providersNode.UpdatedAt = DateTimeOffset.UtcNow;
+        }
+
+        db.AppSettings.Add(new AppSetting
+        {
+            Key = PublicSeedContentMigrationKey,
+            Value = "applied",
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
     }
 
     private static async Task EnsureSearchIndexAsync(ArgusDbContext db, CancellationToken cancellationToken)
@@ -320,7 +378,7 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
         var now = DateTimeOffset.UtcNow;
         var nodes = new Dictionary<string, Node>(StringComparer.OrdinalIgnoreCase)
         {
-            ["Argus"] = CreateNode("Argus", "Project", "Local-first AI command center", 5, "cyan", 520, 330, now),
+            ["Argus"] = CreateNode("Argus", "Project", "Local-first AI agent with durable memory and connected context", 5, "cyan", 520, 330, now),
             ["Argus Agent"] = CreateNode("Argus Agent", "Agent", "Supervised local agent loop", 5, "violet", 790, 210, now),
             ["Research Brief"] = CreateNode("Research Brief", "Project", "Collect and connect research for a new product idea", 4, "magenta", 270, 210, now),
             ["Product Launch"] = CreateNode("Product Launch", "Project", "A sample launch plan with tasks and decisions", 4, "amber", 250, 500, now),
@@ -328,7 +386,7 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
             ["Telegram Gateway"] = CreateNode("Telegram Gateway", "Tool", "Secure remote access from Telegram", 3, "blue", 120, 350, now),
             ["Web Search"] = CreateNode("Web Search", "Tool", "Private web research through local SearXNG", 4, "teal", 900, 390, now),
             ["Local Model"] = CreateNode("Local Model", "Tool", "OpenAI-compatible local inference endpoint", 3, "rose", 960, 120, now),
-            ["Model Providers"] = CreateNode("Model Providers", "Note", "DeepSeek, OpenAI, OpenRouter, and custom endpoints", 3, "pink", 1030, 280, now),
+            ["LLM Connections"] = CreateNode("LLM Connections", "Note", "DeepSeek, OpenAI, OpenRouter, local LLMs, and custom endpoints", 3, "pink", 1030, 280, now),
             ["Knowledge Base"] = CreateNode("Knowledge Base", "Memory", "SQLite-backed durable recall", 5, "green", 560, 120, now),
             ["Graph Explorer"] = CreateNode("Graph Explorer", "Idea", "Navigate relationships across projects, memories, and decisions", 4, "yellow", 420, 85, now)
         };
@@ -336,13 +394,13 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
         db.Nodes.AddRange(nodes.Values);
         db.Edges.AddRange(
             CreateEdge(nodes["Research Brief"], nodes["Web Search"], "uses", 0.8, now),
-            CreateEdge(nodes["Research Brief"], nodes["Model Providers"], "uses", 0.7, now),
+            CreateEdge(nodes["Research Brief"], nodes["LLM Connections"], "uses", 0.7, now),
             CreateEdge(nodes["Argus Agent"], nodes["Research Brief"], "related_to", 0.7, now),
             CreateEdge(nodes["Argus"], nodes["Graph Explorer"], "inspired_by", 0.75, now),
             CreateEdge(nodes["Argus"], nodes["Knowledge Base"], "uses", 0.9, now),
             CreateEdge(nodes["Argus"], nodes["Argus Agent"], "related_to", 0.62, now),
             CreateEdge(nodes["Automation Lab"], nodes["Argus"], "related_to", 0.58, now),
-            CreateEdge(nodes["Local Model"], nodes["Model Providers"], "belongs_to", 0.72, now),
+            CreateEdge(nodes["Local Model"], nodes["LLM Connections"], "belongs_to", 0.72, now),
             CreateEdge(nodes["Web Search"], nodes["Telegram Gateway"], "related_to", 0.52, now));
 
         db.Conversations.Add(new Conversation
@@ -355,7 +413,7 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
                 new Message
                 {
                     Role = "assistant",
-                    Content = "Argus is ready. Add nodes, connect projects, and configure an OpenAI-compatible provider when you want live chat.",
+                    Content = "Argus is ready. Connect an LLM to chat, use tools, recall durable memory, and work with your graph and project context.",
                     CreatedAt = now,
                     LinkedNodeId = nodes["Argus"].Id
                 }
