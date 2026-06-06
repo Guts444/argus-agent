@@ -186,12 +186,30 @@ docker compose -f docker-compose.searxng.yml down
 ## Connect an LLM
 
 Open **Settings > LLM Connection**, choose a service and model, then enter the
-credential required by that LLM. You can use:
+credential required by that LLM (no API key is required for trusted localhost connections). You can use:
 
 - Hosted LLMs through DeepSeek, OpenAI, or OpenRouter.
-- Local LLMs through Ollama, LM Studio, vLLM, or another compatible server.
-- A custom OpenAI-compatible base URL, such as
-  `http://localhost:11434/v1`.
+- Local LLMs through Ollama, LM Studio, Hugging Face, vLLM, or another compatible server.
+
+### Local LLM Setup (Ollama, LM Studio, Hugging Face)
+
+To connect local models, select your local provider from the **LLM service** dropdown:
+
+1. **Ollama**:
+   - Make sure Ollama is running (`ollama serve`).
+   - Choose **Local Model** (preconfigured to `http://localhost:11434/v1`).
+   - Click **Refresh Models** to load your downloaded Ollama models, select one, and click **Save LLM Settings**.
+
+2. **LM Studio**:
+   - Start LM Studio and go to the **Local Server** tab.
+   - Start the server on port `1234` (default).
+   - In Argus Settings, select **LM Studio** (preconfigured to `http://localhost:1234/v1`).
+   - Click **Refresh Models** to load the active model, select it, and click **Save LLM Settings**.
+
+3. **Hugging Face / Custom local servers**:
+   - Start your local OpenAI-compatible inference server (e.g. `llama.cpp` server, `vLLM`, or a local Hugging Face TGI server).
+   - In Argus Settings, select **Custom** and enter your server's base URL (e.g. `http://localhost:8000/v1`).
+   - Click **Refresh Models** to retrieve available models, select the active model, and save.
 
 For development and automated launches, Argus also recognizes:
 
@@ -267,7 +285,7 @@ dotnet run --project Argus.App\Argus.App.csproj
 
 ```powershell
 winget install --id JRSoftware.InnoSetup --exact
-.\scripts\build-release.ps1 -Version 0.1.3
+.\scripts\build-release.ps1 -Version 0.1.4
 ```
 
 Artifacts are written to `artifacts\installer`:
@@ -288,7 +306,7 @@ Argus.Tests  unit and integration coverage
 
 ## Status
 
-Argus `v0.1.3` includes the supervised agent loop, durable memory, connected
+Argus `v0.1.4` includes the supervised agent loop, durable memory, connected
 graph context, local-project awareness, LLM integrations, private web research,
 Telegram access, desktop installer, and in-app updates. Image, voice, and
 general file-analysis skills are not yet included.

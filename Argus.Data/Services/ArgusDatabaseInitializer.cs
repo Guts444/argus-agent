@@ -156,6 +156,18 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
             openRouter.ApiKeyStorageKey = "ai.openrouter.api_key";
         }
 
+        if (!await db.AiProviderProfiles.AnyAsync(profile => profile.Name == "LM Studio", cancellationToken))
+        {
+            db.AiProviderProfiles.Add(new AiProviderProfile
+            {
+                Name = "LM Studio",
+                ProviderType = "OpenAICompatible",
+                BaseUrl = "http://localhost:1234/v1",
+                Model = "lmstudio-model",
+                ApiKeyStorageKey = "ai.lm-studio.api_key"
+            });
+        }
+
         if (!deepSeekDefaultsMigrated)
         {
             db.AppSettings.Add(new AppSetting
@@ -361,6 +373,14 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
                 BaseUrl = "http://localhost:11434/v1",
                 Model = "local-model",
                 ApiKeyStorageKey = "ai.local-model.api_key"
+            },
+            new AiProviderProfile
+            {
+                Name = "LM Studio",
+                ProviderType = "OpenAICompatible",
+                BaseUrl = "http://localhost:1234/v1",
+                Model = "lmstudio-model",
+                ApiKeyStorageKey = "ai.lm-studio.api_key"
             },
             new AiProviderProfile
             {

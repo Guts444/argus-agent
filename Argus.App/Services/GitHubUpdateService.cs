@@ -134,6 +134,6 @@ public sealed class GitHubUpdateService(HttpClient httpClient) : IAppUpdateServi
 
     private static string GetCurrentVersion()
     {
-        return typeof(GitHubUpdateService).Assembly.GetName().Version?.ToString(3) ?? "0.1.3";
+        return typeof(GitHubUpdateService).Assembly.GetName().Version?.ToString(3) ?? "0.1.4";
     }
 }

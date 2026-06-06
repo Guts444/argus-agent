@@ -152,7 +152,7 @@ public static class AiModelCatalog
         return models;
     }
 
-    public static IReadOnlyList<AiModelMetadata> ParseOpenAiModels(string json)
+    public static IReadOnlyList<AiModelMetadata> ParseOpenAiModels(string json, bool isLocalOrCustom = false)
     {
         using var doc = JsonDocument.Parse(json);
         if (!doc.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
@@ -165,7 +165,7 @@ public static class AiModelCatalog
         foreach (var item in data.EnumerateArray())
         {
             var id = item.TryGetProperty("id", out var idElement) ? idElement.GetString() : null;
-            if (string.IsNullOrWhiteSpace(id) || !IsLikelyTextGenerationModel(id))
+            if (string.IsNullOrWhiteSpace(id) || !IsLikelyTextGenerationModel(id, isLocalOrCustom))
             {
                 continue;
             }
@@ -180,7 +180,7 @@ public static class AiModelCatalog
             .ToList();
     }
 
-    private static bool IsLikelyTextGenerationModel(string id)
+    private static bool IsLikelyTextGenerationModel(string id, bool isLocalOrCustom = false)
     {
         if (id.Contains("embedding", StringComparison.OrdinalIgnoreCase) ||
             id.Contains("moderation", StringComparison.OrdinalIgnoreCase) ||
@@ -193,6 +193,11 @@ public static class AiModelCatalog
             id.Contains("audio", StringComparison.OrdinalIgnoreCase))
         {
             return false;
+        }
+
+        if (isLocalOrCustom)
+        {
+            return true;
         }
 
         return id.StartsWith("gpt-", StringComparison.OrdinalIgnoreCase) ||

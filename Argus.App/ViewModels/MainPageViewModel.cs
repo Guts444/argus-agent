@@ -1730,7 +1730,7 @@ public partial class MainPageViewModel(
             }
 
             var body = await response.Content.ReadAsStringAsync();
-            var parsed = AiModelCatalog.ParseOpenAiModels(body);
+            var parsed = AiModelCatalog.ParseOpenAiModels(body, isLocalOrCustom: true);
             return parsed.Count > 0
                 ? parsed
                 : string.IsNullOrWhiteSpace(SelectedProvider.Model)

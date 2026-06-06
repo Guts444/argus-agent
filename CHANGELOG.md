@@ -2,6 +2,12 @@
 
 All notable changes to Argus are documented here.
 
+## 0.1.4 - 2026-06-06
+
+- Added predefined LM Studio integration profile matching default port 1234.
+- Fixed a model list loading bug where OpenAI-compatible local/custom models (LM Studio, Ollama, Hugging Face, etc.) were filtered out and not shown due to prefix matching.
+- Updated documentation with instructions for local model setup.
+
 ## 0.1.3 - 2026-06-06
 
 - Embedded the custom application icon into the executable, fixing the issue where the application and its shortcuts had default Windows icons.
