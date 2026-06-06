@@ -620,7 +620,13 @@
                                 <TextBlock Text="Model" Style="{StaticResource MetaTextStyle}" Margin="0,8,0,0" />
                                 <ComboBox ItemsSource="{Binding ModelOptions}" SelectedItem="{Binding SelectedModel, Mode=TwoWay}" />
                                 <TextBlock Text="API Key" Style="{StaticResource MetaTextStyle}" Margin="0,8,0,0" />
-                                <PasswordBox x:Name="ApiKeyPasswordBox" PlaceholderText="Enter API key" PasswordChanged="ApiKeyBox_OnPasswordChanged" />
+                                <PasswordBox x:Name="ApiKeyPasswordBox" PlaceholderText="{Binding ApiKeyPlaceholder}" PasswordChanged="ApiKeyBox_OnPasswordChanged" />
+                                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,12,0,0">
+                                    <Button Command="{Binding SaveProviderSettingsCommand}">Save LLM Settings</Button>
+                                    <Button Command="{Binding TestSelectedProviderCommand}">Test Connection</Button>
+                                    <Button Command="{Binding RefreshProviderModelsCommand}">Refresh Models</Button>
+                                </StackPanel>
+                                <TextBlock Text="{Binding SettingsStatus}" Style="{StaticResource MetaTextStyle}" Margin="0,6,0,0" TextWrapping="WrapWholeWords" />
                             </StackPanel>
                         </Border>
 
@@ -646,7 +652,7 @@
                                         <TextBlock Text="{Binding TelegramGatewayStatusDisplayText}" Style="{StaticResource MetaTextStyle}" FontFamily="Cascadia Code" />
                                     </StackPanel>
                                 </Grid>
-                                <PasswordBox x:Name="TelegramTokenBox" Header="Bot Token" PlaceholderText="Telegram bot token" PasswordChanged="TelegramTokenBox_OnPasswordChanged" />
+                                <PasswordBox x:Name="TelegramTokenBox" Header="Bot Token" PlaceholderText="{Binding TelegramTokenPlaceholder}" PasswordChanged="TelegramTokenBox_OnPasswordChanged" />
                                 <TextBox Header="Allowed User IDs" PlaceholderText="comma-separated Telegram user IDs" Text="{Binding TelegramAllowedUserIds, Mode=TwoWay}" />
                                 <ToggleSwitch Header="Webhook Mode" IsOn="{Binding TelegramUseWebhook, Mode=TwoWay}" />
                                 <TextBox Header="Webhook URL" PlaceholderText="https://example.com/telegram" Text="{Binding TelegramWebhookUrl, Mode=TwoWay}" />

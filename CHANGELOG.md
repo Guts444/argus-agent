@@ -2,6 +2,12 @@
 
 All notable changes to Argus are documented here.
 
+## 0.1.2 - 2026-06-06
+
+- Added connection management buttons (Save LLM Settings, Test Connection, Refresh Models) for AI Provider API Key configuration.
+- Added visual indicator showing if API keys and Telegram bot tokens are saved or configured.
+- Fixed an issue where API keys entered in Settings were not stored persistently and did not survive app restarts.
+
 ## 0.1.1 - 2026-06-06
 
 - Added a new wolf-seal application identity across the executable, title bar, sidebar, Windows tiles, and splash assets.

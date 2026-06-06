@@ -105,6 +105,12 @@ public partial class MainPageViewModel(
     public partial string ApiKeyInput { get; set; } = string.Empty;
 
     [ObservableProperty]
+    public partial string ApiKeyPlaceholder { get; set; } = "Enter API key";
+
+    [ObservableProperty]
+    public partial string TelegramTokenPlaceholder { get; set; } = "Telegram bot token";
+
+    [ObservableProperty]
     public partial string TagEditorText { get; set; } = string.Empty;
 
     [ObservableProperty]
@@ -988,13 +994,14 @@ public partial class MainPageViewModel(
         if (!string.IsNullOrWhiteSpace(ApiKeyInput))
         {
             // API keys are stored outside SQLite in the Windows Credential Locker.
-            await App.Services.GetRequiredService<ISecretStore>().SetSecretAsync(SelectedProvider.ApiKeyStorageKey, ApiKeyInput);
+            await secretStore.SetSecretAsync(SelectedProvider.ApiKeyStorageKey, ApiKeyInput);
             ApiKeyInput = string.Empty;
         }
 
         var saved = await settingsService.SaveAiProviderProfileAsync(SelectedProvider);
         await LoadProvidersAsync(saved.Id);
         await LoadModelOptionsForSelectedProviderAsync(forceRefresh: false);
+        await UpdateApiKeyPlaceholderAsync(SelectedProvider);
         SettingsStatus = "LLM settings saved.";
     }
 
@@ -1232,6 +1239,7 @@ public partial class MainPageViewModel(
         var enabledStr = await settingsService.GetSettingAsync("TelegramBotEnabled", "false");
         TelegramBotEnabled = bool.TryParse(enabledStr, out var enabled) && enabled;
         TelegramBotToken = await secretStore.GetSecretAsync("telegram.bot_token") ?? "";
+        UpdateTelegramTokenPlaceholder();
         if (string.IsNullOrWhiteSpace(TelegramBotToken))
         {
             var legacyToken = await settingsService.GetSettingAsync("TelegramBotToken", "") ?? "";
@@ -1981,6 +1989,7 @@ public partial class MainPageViewModel(
         OnPropertyChanged(nameof(ReasoningEffortHigh));
         OnPropertyChanged(nameof(ReasoningEffortMax));
         _ = LoadModelOptionsForSelectedProviderAsync(forceRefresh: false);
+        _ = UpdateApiKeyPlaceholderAsync(value);
 
         if (value is not null && !value.IsDefault)
         {
@@ -2026,6 +2035,76 @@ public partial class MainPageViewModel(
         {
             await settingsService.SaveSettingAsync("IsWebSearchEnabled", value.ToString());
         });
+    }
+
+    private async Task UpdateApiKeyPlaceholderAsync(AiProviderProfile? profile)
+    {
+        if (profile is null)
+        {
+            if (App.DispatcherQueue is not null)
+            {
+                App.DispatcherQueue.TryEnqueue(() => ApiKeyPlaceholder = "Enter API key");
+            }
+            else
+            {
+                ApiKeyPlaceholder = "Enter API key";
+            }
+            return;
+        }
+
+        var storageKey = profile.ApiKeyStorageKey;
+        if (string.IsNullOrWhiteSpace(storageKey))
+        {
+            storageKey = $"ai.{profile.Name.ToLowerInvariant().Replace(' ', '-')}.api_key";
+        }
+
+        var key = await secretStore.GetSecretAsync(storageKey);
+        string placeholder;
+        if (!string.IsNullOrWhiteSpace(key))
+        {
+            placeholder = "•••••••• (Saved)";
+        }
+        else
+        {
+            var resolvedKey = await ResolveApiKeyAsync(profile);
+            if (!string.IsNullOrWhiteSpace(resolvedKey))
+            {
+                placeholder = "Configured via Env Var";
+            }
+            else
+            {
+                placeholder = "Enter API key";
+            }
+        }
+
+        if (App.DispatcherQueue is not null)
+        {
+            App.DispatcherQueue.TryEnqueue(() => ApiKeyPlaceholder = placeholder);
+        }
+        else
+        {
+            ApiKeyPlaceholder = placeholder;
+        }
+    }
+
+    private void UpdateTelegramTokenPlaceholder()
+    {
+        var placeholder = string.IsNullOrWhiteSpace(TelegramBotToken)
+            ? "Telegram bot token"
+            : "•••••••• (Saved)";
+        if (App.DispatcherQueue is not null)
+        {
+            App.DispatcherQueue.TryEnqueue(() => TelegramTokenPlaceholder = placeholder);
+        }
+        else
+        {
+            TelegramTokenPlaceholder = placeholder;
+        }
+    }
+
+    partial void OnTelegramBotTokenChanged(string value)
+    {
+        UpdateTelegramTokenPlaceholder();
     }
 
     public Microsoft.UI.Xaml.Visibility BottomChatVisibility => CurrentView is "Dashboard" ? Microsoft.UI.Xaml.Visibility.Collapsed : Microsoft.UI.Xaml.Visibility.Visible;
