@@ -1,0 +1,115 @@
+using System.Diagnostics;
+using System.Net.Http.Headers;
+using System.Text.Json;
+
+namespace Argus.App.Services;
+
+public sealed record AppUpdateInfo(
+    Version Version,
+    string DisplayVersion,
+    string Name,
+    string Notes,
+    Uri ReleasePageUri,
+    Uri InstallerUri);
+
+public interface IAppUpdateService
+{
+    Task<AppUpdateInfo?> GetLatestReleaseAsync(CancellationToken cancellationToken = default);
+    Task DownloadAndLaunchInstallerAsync(AppUpdateInfo update, CancellationToken cancellationToken = default);
+}
+
+public sealed class GitHubUpdateService(HttpClient httpClient) : IAppUpdateService
+{
+    private static readonly Uri LatestReleaseUri =
+        new("https://api.github.com/repos/Guts444/argus-agent/releases/latest");
+
+    public async Task<AppUpdateInfo?> GetLatestReleaseAsync(CancellationToken cancellationToken = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, LatestReleaseUri);
+        request.Headers.UserAgent.Add(new ProductInfoHeaderValue("Argus", GetCurrentVersion()));
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+        request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
+
+        using var response = await httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            return null;
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var root = document.RootElement;
+        var tag = root.GetProperty("tag_name").GetString()?.Trim().TrimStart('v');
+        if (!Version.TryParse(tag, out var version))
+        {
+            return null;
+        }
+
+        Uri? installerUri = null;
+        if (root.TryGetProperty("assets", out var assets))
+        {
+            foreach (var asset in assets.EnumerateArray())
+            {
+                var name = asset.GetProperty("name").GetString();
+                if (name?.StartsWith("ArgusAgentSetup-x64", StringComparison.OrdinalIgnoreCase) != true ||
+                    !name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var downloadUrl = asset.GetProperty("browser_download_url").GetString();
+                if (Uri.TryCreate(downloadUrl, UriKind.Absolute, out installerUri))
+                {
+                    break;
+                }
+            }
+        }
+
+        var releaseUrl = root.GetProperty("html_url").GetString();
+        if (installerUri is null || !Uri.TryCreate(releaseUrl, UriKind.Absolute, out var releasePageUri))
+        {
+            return null;
+        }
+
+        return new AppUpdateInfo(
+            version,
+            $"v{version}",
+            root.GetProperty("name").GetString() ?? $"Argus v{version}",
+            root.GetProperty("body").GetString() ?? "See the release page for details.",
+            releasePageUri,
+            installerUri);
+    }
+
+    public async Task DownloadAndLaunchInstallerAsync(
+        AppUpdateInfo update,
+        CancellationToken cancellationToken = default)
+    {
+        var updateDirectory = Path.Combine(Path.GetTempPath(), "Argus", "updates");
+        Directory.CreateDirectory(updateDirectory);
+        var installerPath = Path.Combine(updateDirectory, $"ArgusAgentSetup-x64-{update.Version}.exe");
+
+        using var response = await httpClient.GetAsync(
+            update.InstallerUri,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        await using (var source = await response.Content.ReadAsStreamAsync(cancellationToken))
+        await using (var destination = File.Create(installerPath))
+        {
+            await source.CopyToAsync(destination, cancellationToken);
+        }
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = installerPath,
+            Arguments = "/CLOSEAPPLICATIONS /RESTARTAPPLICATIONS",
+            UseShellExecute = true
+        });
+    }
+
+    private static string GetCurrentVersion()
+    {
+        return typeof(GitHubUpdateService).Assembly.GetName().Version?.ToString(3) ?? "0.1.0";
+    }
+}

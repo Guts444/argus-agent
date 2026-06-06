@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+      - name: Build release
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          ./scripts/build-release.ps1 -Version $version
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $assets = @(
+            "./artifacts/installer/ArgusAgentSetup-x64.exe",
+            "./artifacts/installer/ArgusAgent-win-x64.zip",
+            "./artifacts/installer/SHA256SUMS.txt"
+          )
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @assets --clobber
+          }
+          else {
+            gh release create $tag @assets `
+              --title "Argus $tag" `
+              --generate-notes
+          }

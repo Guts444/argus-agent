@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Application
+    x:Class="Argus.App.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:converters="using:Argus.App.Converters"
+    xmlns:local="using:Argus.App">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <converters:ViewVisibilityConverter x:Key="ViewVisibilityConverter" />
+            <converters:NullToVisibilityConverter x:Key="NullToVisibilityConverter" />
+            <converters:EmptyStringToVisibilityConverter x:Key="EmptyStringToVisibilityConverter" />
+            <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter" />
+            <converters:RoleToIconConverter x:Key="RoleToIconConverter" />
+            <converters:CategoryActiveBrushConverter x:Key="CategoryActiveBrushConverter" />
+            <converters:CategoryActiveForegroundConverter x:Key="CategoryActiveForegroundConverter" />
+            <converters:RoleVisibilityConverter x:Key="RoleVisibilityConverter" />
+            <converters:ThinkingHeaderConverter x:Key="ThinkingHeaderConverter" />
+            <converters:ThinkingBodyConverter x:Key="ThinkingBodyConverter" />
+            <converters:ThinkingActiveConverter x:Key="ThinkingActiveConverter" />
+            <converters:ThinkingActiveVisibilityConverter x:Key="ThinkingActiveVisibilityConverter" />
+
+            <SolidColorBrush x:Key="ArgusBackgroundBrush" Color="#FF060910" />
+            <SolidColorBrush x:Key="SidebarBrush" Color="#EE080D18" />
+            <SolidColorBrush x:Key="PanelBrush" Color="#B5070D1A" />
+            <SolidColorBrush x:Key="PanelStrongBrush" Color="#E80A1222" />
+            <SolidColorBrush x:Key="ArgusBorderBrush" Color="#6636F7FF" />
+            <SolidColorBrush x:Key="ArgusMutedBorderBrush" Color="#334E7D90" />
+            <SolidColorBrush x:Key="ArgusTextBrush" Color="#FFEAF8FF" />
+            <SolidColorBrush x:Key="ArgusMutedTextBrush" Color="#FFA8B7C4" />
+            <SolidColorBrush x:Key="ArgusAccentBrush" Color="#FF36F7FF" />
+            <SolidColorBrush x:Key="ArgusMagentaBrush" Color="#FFFF4FD8" />
+            <SolidColorBrush x:Key="ArgusAmberBrush" Color="#FFFFC857" />
+
+            <Style x:Key="SidebarButtonStyle" TargetType="Button">
+                <Setter Property="Width" Value="44" />
+                <Setter Property="Height" Value="44" />
+                <Setter Property="HorizontalAlignment" Value="Center" />
+                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                <Setter Property="VerticalContentAlignment" Value="Center" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Margin" Value="0" />
+                <Setter Property="Background" Value="#1400F0FF" />
+                <Setter Property="Foreground" Value="{StaticResource ArgusTextBrush}" />
+                <Setter Property="BorderBrush" Value="{StaticResource ArgusMutedBorderBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="8" />
+            </Style>
+
+            <Style x:Key="DashboardWidgetStyle" TargetType="Border">
+                <Setter Property="Padding" Value="14" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="Background" Value="#66050B18" />
+                <Setter Property="BorderBrush" Value="{StaticResource ArgusMutedBorderBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+            </Style>
+
+            <Style x:Key="MetricTextStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="28" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="Foreground" Value="{StaticResource ArgusTextBrush}" />
+                <Setter Property="FontFamily" Value="Cascadia Code" />
+            </Style>
+
+            <Style x:Key="DashboardListViewStyle" TargetType="ListView">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderBrush" Value="Transparent" />
+                <Setter Property="SelectionMode" Value="None" />
+                <Setter Property="IsItemClickEnabled" Value="False" />
+            </Style>
+
+            <Style x:Key="PanelTitleStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="18" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="Foreground" Value="{StaticResource ArgusTextBrush}" />
+            </Style>
+
+            <Style x:Key="MetaTextStyle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="12" />
+                <Setter Property="Foreground" Value="{StaticResource ArgusMutedTextBrush}" />
+            </Style>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

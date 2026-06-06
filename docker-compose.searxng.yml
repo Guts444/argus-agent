@@ -1,0 +1,15 @@
+name: argus-agent
+
+services:
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    container_name: argus-searxng
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      SEARXNG_BASE_URL: http://localhost:8080/
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-change-me-before-exposing}
+      SEARXNG_LIMITER: "false"
+    volumes:
+      - ./config/searxng/settings.yml:/etc/searxng/settings.yml:ro
