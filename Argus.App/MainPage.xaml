@@ -156,18 +156,33 @@
                             <Button Command="{Binding OpenCommandPaletteCommand}" ToolTipService.ToolTip="Command palette">
                                 <FontIcon Glyph="&#xE756;" FontSize="14" />
                             </Button>
+                            <Button ToolTipService.ToolTip="Edit widgets">
+                                <FontIcon Glyph="&#xE70F;" FontSize="14" />
+                                <Button.Flyout>
+                                    <Flyout Placement="BottomEdgeAlignedRight">
+                                        <StackPanel Spacing="10" MinWidth="180">
+                                            <TextBlock Text="Manage Widgets" FontWeight="Bold" Style="{StaticResource MetaTextStyle}" Margin="0,0,0,4" />
+                                            <CheckBox Content="System Status" IsChecked="{Binding ShowSystemStatusWidget, Mode=TwoWay}" />
+                                            <CheckBox Content="Active Projects" IsChecked="{Binding ShowProjectsWidget, Mode=TwoWay}" />
+                                            <CheckBox Content="Market" IsChecked="{Binding ShowMarketWidget, Mode=TwoWay}" />
+                                            <CheckBox Content="Intel Feed" IsChecked="{Binding ShowNewsWidget, Mode=TwoWay}" />
+                                            <CheckBox Content="Soccer Scoreboard" IsChecked="{Binding ShowSportsWidget, Mode=TwoWay}" />
+                                        </StackPanel>
+                                    </Flyout>
+                                </Button.Flyout>
+                            </Button>
                         </StackPanel>
                     </Grid>
 
                     <Grid Grid.Row="1" ColumnSpacing="12" RowSpacing="12">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="330" />
+                            <ColumnDefinition Width="{Binding Column0Width}" />
                             <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="400" />
+                            <ColumnDefinition Width="{Binding Column2Width}" />
                         </Grid.ColumnDefinitions>
 
                         <StackPanel Grid.Column="0" Spacing="12">
-                            <Border Style="{StaticResource DashboardWidgetStyle}">
+                            <Border Style="{StaticResource DashboardWidgetStyle}" Visibility="{Binding ShowSystemStatusWidget, Converter={StaticResource BoolToVisibilityConverter}}">
                                 <StackPanel Spacing="12">
                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                         <Border Width="8" Height="8" CornerRadius="4" Background="#FF00FF88" VerticalAlignment="Center" />
@@ -211,7 +226,7 @@
                                 </StackPanel>
                             </Border>
 
-                            <Border Style="{StaticResource DashboardWidgetStyle}">
+                            <Border Style="{StaticResource DashboardWidgetStyle}" Visibility="{Binding ShowProjectsWidget, Converter={StaticResource BoolToVisibilityConverter}}">
                                 <Grid RowSpacing="12">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
@@ -317,7 +332,7 @@
                         </Grid>
 
                         <StackPanel Grid.Column="2" Spacing="12">
-                            <Border Style="{StaticResource DashboardWidgetStyle}">
+                            <Border Style="{StaticResource DashboardWidgetStyle}" Visibility="{Binding ShowMarketWidget, Converter={StaticResource BoolToVisibilityConverter}}">
                                 <Grid RowSpacing="8">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
@@ -365,7 +380,7 @@
                                 </Grid>
                             </Border>
 
-                            <Border Style="{StaticResource DashboardWidgetStyle}">
+                            <Border Style="{StaticResource DashboardWidgetStyle}" Visibility="{Binding ShowNewsWidget, Converter={StaticResource BoolToVisibilityConverter}}">
                                 <Grid RowSpacing="8">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
@@ -402,7 +417,7 @@
                                 </Grid>
                             </Border>
 
-                            <Border Style="{StaticResource DashboardWidgetStyle}">
+                            <Border Style="{StaticResource DashboardWidgetStyle}" Visibility="{Binding ShowSportsWidget, Converter={StaticResource BoolToVisibilityConverter}}">
                                 <Grid RowSpacing="8">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto" />
@@ -619,8 +634,11 @@
                                 </ComboBox>
                                 <TextBlock Text="Model" Style="{StaticResource MetaTextStyle}" Margin="0,8,0,0" />
                                 <ComboBox ItemsSource="{Binding ModelOptions}" SelectedItem="{Binding SelectedModel, Mode=TwoWay}" />
-                                <TextBlock Text="API Key" Style="{StaticResource MetaTextStyle}" Margin="0,8,0,0" />
-                                <PasswordBox x:Name="ApiKeyPasswordBox" PlaceholderText="{Binding ApiKeyPlaceholder}" PasswordChanged="ApiKeyBox_OnPasswordChanged" />
+                                <StackPanel Visibility="{Binding IsApiKeyRequired, Converter={StaticResource BoolToVisibilityConverter}}" Spacing="4" Margin="0,8,0,0">
+                                    <TextBlock Text="API Key" Style="{StaticResource MetaTextStyle}" />
+                                    <PasswordBox x:Name="ApiKeyPasswordBox" PlaceholderText="{Binding ApiKeyPlaceholder}" PasswordChanged="ApiKeyBox_OnPasswordChanged" />
+                                </StackPanel>
+
                                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,12,0,0">
                                     <Button Command="{Binding SaveProviderSettingsCommand}">Save LLM Settings</Button>
                                     <Button Command="{Binding TestSelectedProviderCommand}">Test Connection</Button>

@@ -18,6 +18,7 @@ public sealed class OpenAiCompatibleChatService(HttpClient httpClient, ISecretSt
         var localNoKeyAllowed = IsTrustedLocalEndpoint(profile.BaseUrl);
         var apiKey = await secretStore.GetSecretAsync(profile.ApiKeyStorageKey, cancellationToken)
             ?? GetEnvironmentApiKey(profile);
+
         if (string.IsNullOrWhiteSpace(apiKey) && !localNoKeyAllowed)
         {
             return new AiChatResult($"Add an API key for {profile.Name} in Settings before chatting.", SetupRequired: true);
@@ -25,10 +26,22 @@ public sealed class OpenAiCompatibleChatService(HttpClient httpClient, ISecretSt
 
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Post, BuildChatUrl(profile.BaseUrl));
-            if (!string.IsNullOrWhiteSpace(apiKey))
+            var isAnthropic = IsAnthropicProfile(profile);
+            using var request = new HttpRequestMessage(HttpMethod.Post, BuildChatUrl(profile.BaseUrl, isAnthropic));
+            if (isAnthropic)
             {
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+                if (!string.IsNullOrWhiteSpace(apiKey))
+                {
+                    request.Headers.TryAddWithoutValidation("x-api-key", apiKey);
+                }
+                request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
+            }
+            else
+            {
+                if (!string.IsNullOrWhiteSpace(apiKey))
+                {
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+                }
             }
 
             var isDeepSeek = IsDeepSeekProfile(profile);
@@ -45,6 +58,11 @@ public sealed class OpenAiCompatibleChatService(HttpClient httpClient, ISecretSt
                 ["messages"] = messages.Select(message => new { role = message.Role, content = message.Content }).ToArray(),
                 ["stream"] = false
             };
+
+            if (isAnthropic)
+            {
+                payload["max_tokens"] = 4096;
+            }
 
             if (isDeepSeek)
             {
@@ -82,32 +100,48 @@ public sealed class OpenAiCompatibleChatService(HttpClient httpClient, ISecretSt
             }
 
             using var document = JsonDocument.Parse(body);
-            var message = document.RootElement
-                .GetProperty("choices")[0]
-                .GetProperty("message");
-            var content = message.TryGetProperty("content", out var contentElement)
-                ? contentElement.GetString()
-                : string.Empty;
-            var reasoning = message.TryGetProperty("reasoning_content", out var reasoningElement)
-                ? reasoningElement.GetString()
-                : message.TryGetProperty("reasoning", out var openRouterReasoningElement)
-                    ? openRouterReasoningElement.GetString()
-                : null;
+            string? content = string.Empty;
+            string? reasoning = null;
+
+            if (isAnthropic)
+            {
+                if (document.RootElement.TryGetProperty("content", out var contentArray) && contentArray.ValueKind == JsonValueKind.Array && contentArray.GetArrayLength() > 0)
+                {
+                    content = contentArray[0].TryGetProperty("text", out var textElement) ? textElement.GetString() : string.Empty;
+                }
+            }
+            else
+            {
+                var message = document.RootElement
+                    .GetProperty("choices")[0]
+                    .GetProperty("message");
+                content = message.TryGetProperty("content", out var contentElement)
+                    ? contentElement.GetString()
+                    : string.Empty;
+                reasoning = message.TryGetProperty("reasoning_content", out var reasoningElement)
+                    ? reasoningElement.GetString()
+                    : message.TryGetProperty("reasoning", out var openRouterReasoningElement)
+                        ? openRouterReasoningElement.GetString()
+                    : null;
+            }
 
             int? promptTokens = null;
             int? completionTokens = null;
             int? totalTokens = null;
             if (document.RootElement.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
             {
-                promptTokens = usage.TryGetProperty("prompt_tokens", out var promptElement) && promptElement.TryGetInt32(out var prompt)
-                    ? prompt
-                    : null;
-                completionTokens = usage.TryGetProperty("completion_tokens", out var completionElement) && completionElement.TryGetInt32(out var completion)
-                    ? completion
-                    : null;
-                totalTokens = usage.TryGetProperty("total_tokens", out var totalElement) && totalElement.TryGetInt32(out var total)
-                    ? total
-                    : null;
+                if (isAnthropic)
+                {
+                    promptTokens = usage.TryGetProperty("input_tokens", out var inputElement) && inputElement.TryGetInt32(out var inputVal) ? inputVal : null;
+                    completionTokens = usage.TryGetProperty("output_tokens", out var outputElement) && outputElement.TryGetInt32(out var outputVal) ? outputVal : null;
+                    totalTokens = (promptTokens ?? 0) + (completionTokens ?? 0);
+                }
+                else
+                {
+                    promptTokens = usage.TryGetProperty("prompt_tokens", out var promptElement) && promptElement.TryGetInt32(out var prompt) ? prompt : null;
+                    completionTokens = usage.TryGetProperty("completion_tokens", out var completionElement) && completionElement.TryGetInt32(out var completion) ? completion : null;
+                    totalTokens = usage.TryGetProperty("total_tokens", out var totalElement) && totalElement.TryGetInt32(out var total) ? total : null;
+                }
             }
 
             var model = document.RootElement.TryGetProperty("model", out var modelElement)
@@ -128,9 +162,17 @@ public sealed class OpenAiCompatibleChatService(HttpClient httpClient, ISecretSt
         }
     }
 
-    private static Uri BuildChatUrl(string baseUrl)
+    private static Uri BuildChatUrl(string baseUrl, bool isAnthropic)
     {
         var trimmed = baseUrl.Trim().TrimEnd('/');
+        if (isAnthropic || trimmed.Contains("api.anthropic.com", StringComparison.OrdinalIgnoreCase))
+        {
+            if (trimmed.EndsWith("/messages", StringComparison.OrdinalIgnoreCase))
+            {
+                return new Uri(trimmed);
+            }
+            return new Uri($"{trimmed}/messages");
+        }
         if (trimmed.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
         {
             return new Uri(trimmed);
@@ -162,6 +204,12 @@ public sealed class OpenAiCompatibleChatService(HttpClient httpClient, ISecretSt
     {
         return profile.ProviderType.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
             profile.BaseUrl.Contains("api.openai.com", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsAnthropicProfile(AiProviderProfile profile)
+    {
+        return profile.ProviderType.Equals("Anthropic", StringComparison.OrdinalIgnoreCase) ||
+            profile.BaseUrl.Contains("api.anthropic.com", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsOpenRouterProfile(AiProviderProfile profile)
@@ -294,6 +342,7 @@ public sealed class OpenAiCompatibleChatService(HttpClient httpClient, ISecretSt
         var localNoKeyAllowed = IsTrustedLocalEndpoint(profile.BaseUrl);
         var apiKey = await secretStore.GetSecretAsync(profile.ApiKeyStorageKey, cancellationToken)
             ?? GetEnvironmentApiKey(profile);
+
         if (string.IsNullOrWhiteSpace(apiKey) && !localNoKeyAllowed)
         {
             return null;

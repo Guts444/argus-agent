@@ -170,6 +170,22 @@ public partial class MainPageViewModel(
     [ObservableProperty]
     public partial AiProviderProfile? SelectedProvider { get; set; }
 
+    public bool IsApiKeyRequired => SelectedProvider is not null && 
+        !IsTrustedLocalEndpoint(SelectedProvider.BaseUrl);
+
+    private static bool IsTrustedLocalEndpoint(string baseUrl)
+    {
+        if (string.IsNullOrWhiteSpace(baseUrl) || !Uri.TryCreate(baseUrl.Trim(), UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        return uri.Scheme is "http" or "https" &&
+            (uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+             uri.Host == "127.0.0.1" ||
+             uri.Host == "::1");
+    }
+
     [ObservableProperty]
     public partial string SelectedModel { get; set; } = string.Empty;
 
@@ -1264,6 +1280,15 @@ public partial class MainPageViewModel(
         var webSearchEnabledStr = await settingsService.GetSettingAsync("IsWebSearchEnabled", "false");
         IsWebSearchEnabled = bool.TryParse(webSearchEnabledStr, out var webSearchEnabled) && webSearchEnabled;
 
+        ShowSystemStatusWidget = bool.TryParse(await settingsService.GetSettingAsync("ShowSystemStatusWidget", "true"), out var b1) ? b1 : true;
+        ShowProjectsWidget = bool.TryParse(await settingsService.GetSettingAsync("ShowProjectsWidget", "true"), out var b2) ? b2 : true;
+        ShowMarketWidget = bool.TryParse(await settingsService.GetSettingAsync("ShowMarketWidget", "true"), out var b3) ? b3 : true;
+        ShowNewsWidget = bool.TryParse(await settingsService.GetSettingAsync("ShowNewsWidget", "true"), out var b4) ? b4 : true;
+        ShowSportsWidget = bool.TryParse(await settingsService.GetSettingAsync("ShowSportsWidget", "true"), out var b5) ? b5 : true;
+
+        OnPropertyChanged(nameof(Column0Width));
+        OnPropertyChanged(nameof(Column2Width));
+
         TelegramGatewayStatusText = telegramGatewayService.Status;
         TelegramGatewayLogsText = telegramGatewayService.GetLogs();
         telegramGatewayService.OnStatusChanged += () =>
@@ -1577,6 +1602,11 @@ public partial class MainPageViewModel(
         {
             models = await LoadOpenAiModelsAsync(forceRefresh);
         }
+        else if (SelectedProvider.ProviderType.Equals("Anthropic", StringComparison.OrdinalIgnoreCase) ||
+                 SelectedProvider.BaseUrl.Contains("api.anthropic.com", StringComparison.OrdinalIgnoreCase))
+        {
+            models = AiModelCatalog.AnthropicModels;
+        }
         else
         {
             models = await LoadOpenAiCompatibleModelsAsync(forceRefresh);
@@ -1768,6 +1798,11 @@ public partial class MainPageViewModel(
         {
             candidates.Add("ARGUS_OPENROUTER_API_KEY");
             candidates.Add("OPENROUTER_API_KEY");
+        }
+        else if (profile.ProviderType.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
+        {
+            candidates.Add("ARGUS_ANTHROPIC_API_KEY");
+            candidates.Add("ANTHROPIC_API_KEY");
         }
 
         candidates.Add($"ARGUS_{NormalizeEnvironmentName(profile.Name)}_API_KEY");
@@ -1988,6 +2023,7 @@ public partial class MainPageViewModel(
         OnPropertyChanged(nameof(ReasoningEffortMedium));
         OnPropertyChanged(nameof(ReasoningEffortHigh));
         OnPropertyChanged(nameof(ReasoningEffortMax));
+        OnPropertyChanged(nameof(IsApiKeyRequired));
         _ = LoadModelOptionsForSelectedProviderAsync(forceRefresh: false);
         _ = UpdateApiKeyPlaceholderAsync(value);
 
@@ -2123,6 +2159,64 @@ public partial class MainPageViewModel(
         {
             DashboardWidgets?.StopLiveMonitoring();
         }
+    }
+
+    [ObservableProperty]
+    public partial bool ShowSystemStatusWidget { get; set; } = true;
+
+    [ObservableProperty]
+    public partial bool ShowProjectsWidget { get; set; } = true;
+
+    [ObservableProperty]
+    public partial bool ShowMarketWidget { get; set; } = true;
+
+    [ObservableProperty]
+    public partial bool ShowNewsWidget { get; set; } = true;
+
+    [ObservableProperty]
+    public partial bool ShowSportsWidget { get; set; } = true;
+
+    public Microsoft.UI.Xaml.GridLength Column0Width => (ShowSystemStatusWidget || ShowProjectsWidget) 
+        ? new Microsoft.UI.Xaml.GridLength(330) 
+        : new Microsoft.UI.Xaml.GridLength(0);
+
+    public Microsoft.UI.Xaml.GridLength Column2Width => (ShowMarketWidget || ShowNewsWidget || ShowSportsWidget) 
+        ? new Microsoft.UI.Xaml.GridLength(400) 
+        : new Microsoft.UI.Xaml.GridLength(0);
+
+    partial void OnShowSystemStatusWidgetChanged(bool value)
+    {
+        SaveWidgetSetting("ShowSystemStatusWidget", value);
+        OnPropertyChanged(nameof(Column0Width));
+    }
+
+    partial void OnShowProjectsWidgetChanged(bool value)
+    {
+        SaveWidgetSetting("ShowProjectsWidget", value);
+        OnPropertyChanged(nameof(Column0Width));
+    }
+
+    partial void OnShowMarketWidgetChanged(bool value)
+    {
+        SaveWidgetSetting("ShowMarketWidget", value);
+        OnPropertyChanged(nameof(Column2Width));
+    }
+
+    partial void OnShowNewsWidgetChanged(bool value)
+    {
+        SaveWidgetSetting("ShowNewsWidget", value);
+        OnPropertyChanged(nameof(Column2Width));
+    }
+
+    partial void OnShowSportsWidgetChanged(bool value)
+    {
+        SaveWidgetSetting("ShowSportsWidget", value);
+        OnPropertyChanged(nameof(Column2Width));
+    }
+
+    private void SaveWidgetSetting(string key, bool value)
+    {
+        _ = Task.Run(async () => await settingsService.SaveSettingAsync(key, value.ToString()));
     }
 
     private static string BuildVersionDisplayText()

@@ -285,7 +285,7 @@ dotnet run --project Argus.App\Argus.App.csproj
 
 ```powershell
 winget install --id JRSoftware.InnoSetup --exact
-.\scripts\build-release.ps1 -Version 0.1.4
+.\scripts\build-release.ps1 -Version 0.1.5
 ```
 
 Artifacts are written to `artifacts\installer`:
@@ -306,7 +306,7 @@ Argus.Tests  unit and integration coverage
 
 ## Status
 
-Argus `v0.1.4` includes the supervised agent loop, durable memory, connected
+Argus `v0.1.5` includes the supervised agent loop, durable memory, connected
 graph context, local-project awareness, LLM integrations, private web research,
 Telegram access, desktop installer, and in-app updates. Image, voice, and
 general file-analysis skills are not yet included.

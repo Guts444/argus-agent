@@ -2,6 +2,12 @@
 
 All notable changes to Argus are documented here.
 
+## 0.1.5 - 2026-06-06
+
+- Made the Settings API Key field conditionally visible, hiding it for trusted local endpoints (localhost, 127.0.0.1, ::1).
+- Added native support for Anthropic API request/response mapping and model catalog.
+- Added dashboard widget customization. Toggling widgets hides/shows them dynamically and collapses their corresponding grid columns, persistently saving preferences.
+
 ## 0.1.4 - 2026-06-06
 
 - Added predefined LM Studio integration profile matching default port 1234.

@@ -29,6 +29,13 @@ public static class AiModelCatalog
         new("gpt-4.1", "GPT-4.1", 1_048_576, 32_768, false, ["none"])
     ];
 
+    public static readonly IReadOnlyList<AiModelMetadata> AnthropicModels =
+    [
+        new("claude-3-5-sonnet-latest", "Claude 3.5 Sonnet (Latest)", 200_000, 8192),
+        new("claude-3-5-haiku-latest", "Claude 3.5 Haiku (Latest)", 200_000, 8192),
+        new("claude-3-opus-latest", "Claude 3 Opus (Latest)", 200_000, 4096)
+    ];
+
     public static readonly IReadOnlyList<AiModelMetadata> OpenRouterFallbackModels =
     [
         new("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro", 1_048_576, null, true),
@@ -59,6 +66,11 @@ public static class AiModelCatalog
             return OpenAiModels;
         }
 
+        if (IsAnthropicProvider(providerType, baseUrl))
+        {
+            return AnthropicModels;
+        }
+
         return [];
     }
 
@@ -72,6 +84,12 @@ public static class AiModelCatalog
     {
         return providerType.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
             baseUrl.Contains("api.openai.com", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static bool IsAnthropicProvider(string providerType, string baseUrl)
+    {
+        return providerType.Equals("Anthropic", StringComparison.OrdinalIgnoreCase) ||
+            baseUrl.Contains("api.anthropic.com", StringComparison.OrdinalIgnoreCase);
     }
 
     public static bool IsOpenRouterProvider(string providerType, string baseUrl)

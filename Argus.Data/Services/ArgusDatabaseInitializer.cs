@@ -168,6 +168,19 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
             });
         }
 
+        if (!await db.AiProviderProfiles.AnyAsync(profile => profile.Name == "Anthropic", cancellationToken))
+        {
+            db.AiProviderProfiles.Add(new AiProviderProfile
+            {
+                Name = "Anthropic",
+                ProviderType = "Anthropic",
+                BaseUrl = "https://api.anthropic.com/v1",
+                Model = "claude-3-5-sonnet-latest",
+                ApiKeyStorageKey = "ai.anthropic.api_key",
+                ThinkingMode = "disabled"
+            });
+        }
+
         if (!deepSeekDefaultsMigrated)
         {
             db.AppSettings.Add(new AppSetting
@@ -365,6 +378,15 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
                 BaseUrl = "https://openrouter.ai/api/v1",
                 Model = "deepseek/deepseek-v4-pro",
                 ApiKeyStorageKey = "ai.openrouter.api_key"
+            },
+            new AiProviderProfile
+            {
+                Name = "Anthropic",
+                ProviderType = "Anthropic",
+                BaseUrl = "https://api.anthropic.com/v1",
+                Model = "claude-3-5-sonnet-latest",
+                ApiKeyStorageKey = "ai.anthropic.api_key",
+                ThinkingMode = "disabled"
             },
             new AiProviderProfile
             {
