@@ -2,6 +2,10 @@
 
 All notable changes to Argus are documented here.
 
+## 0.1.3 - 2026-06-06
+
+- Embedded the custom application icon into the executable, fixing the issue where the application and its shortcuts had default Windows icons.
+
 ## 0.1.2 - 2026-06-06
 
 - Added connection management buttons (Save LLM Settings, Test Connection, Refresh Models) for AI Provider API Key configuration.
