@@ -16,7 +16,16 @@ public sealed record ProjectDashboardCard(
     IReadOnlyList<string> NextActions,
     string? RepoHealthLabel,
     string? RepoHealthDetail,
-    bool HasRepoWarning);
+    bool HasRepoWarning)
+{
+    public string OpenTaskCountText => $"{OpenTaskCount} tasks";
+    public string DecisionCountText => $"{DecisionCount} decisions";
+    public string BlockerCountText => $"{BlockerCount} blocked";
+    public string FirstNextAction => NextActions.Count > 0 ? NextActions[0] : "";
+    public string RepoHealthDisplay => RepoHealthLabel ?? "";
+    public bool HasRepoHealth => !string.IsNullOrWhiteSpace(RepoHealthLabel);
+    public bool HasBlockers => BlockerCount > 0;
+}
 
 /// <summary>
 /// Aggregated project intelligence for the dashboard.
@@ -26,7 +35,13 @@ public sealed record CoherentDashboard(
     IReadOnlyList<string> GlobalBlockers,
     IReadOnlyList<string> GlobalNextActions,
     int TotalOpenTasks,
-    int TotalBlockers);
+    int TotalBlockers)
+{
+    public string TotalOpenTasksText => $"{TotalOpenTasks} tasks";
+    public string TotalBlockersText => $"{TotalBlockers} blocked";
+    public bool HasGlobalBlockers => GlobalBlockers.Count > 0;
+    public bool HasGlobalNextActions => GlobalNextActions.Count > 0;
+}
 
 /// <summary>
 /// Builds a coherent project dashboard that combines graph data,

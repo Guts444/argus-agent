@@ -329,7 +329,7 @@ Argus.Tests  unit and integration coverage
 
 ## Status
 
-Argus `v0.3.0` adds a first-run setup wizard, coherent project cockpit with repo health and blocker detection, conversation search, smart widget defaults, per-source context token breakdown, and empty-state placeholders. 54 tests green.
+Argus `v0.3.1` — hotfix for WinUI binding crash on project cockpit dashboard. Safe TextBlock bindings replace fragile Run elements.
 
 ## License
 
