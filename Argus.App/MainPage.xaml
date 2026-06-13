@@ -630,12 +630,37 @@
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <TextBox PlaceholderText="Search conversations" />
-                            <Button Grid.Column="1">
+                            <TextBox PlaceholderText="Search conversations" Text="{Binding ConversationSearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            <Button Grid.Column="1" Command="{Binding SearchConversationsCommand}">
                                 <FontIcon Glyph="&#xE721;" />
                             </Button>
                         </Grid>
-                        <ListView Grid.Row="1" ItemsSource="{Binding Conversations}" SelectionMode="Single" SelectedItem="{Binding SelectedConversation, Mode=TwoWay}">
+                        <!-- Search results -->
+                        <ListView Grid.Row="1"
+                                  ItemsSource="{Binding ConversationSearchResults}"
+                                  Visibility="{Binding HasConversationSearchResults, Converter={StaticResource BoolToVisibilityConverter}}"
+                                  SelectionMode="Single">
+                            <ListView.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Padding="10" Margin="0,0,0,8" CornerRadius="8" BorderBrush="{StaticResource ArgusMutedBorderBrush}" BorderThickness="1">
+                                        <StackPanel Spacing="4">
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <TextBlock Text="{Binding Role}" FontWeight="SemiBold" Foreground="{StaticResource ArgusAccentBrush}" />
+                                                <TextBlock Text="{Binding ConversationTitle}" Style="{StaticResource MetaTextStyle}" />
+                                            </StackPanel>
+                                            <TextBlock Text="{Binding Snippet}" Foreground="{StaticResource ArgusTextBrush}" TextWrapping="Wrap" MaxHeight="80" />
+                                            <TextBlock Text="{Binding MessageCreatedAt, Converter={StaticResource DateTimeOffsetToStringConverter}}" Style="{StaticResource MetaTextStyle}" FontSize="10" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+                        <!-- Regular conversation list -->
+                        <ListView Grid.Row="1"
+                                  ItemsSource="{Binding Conversations}"
+                                  Visibility="{Binding HasConversationSearchResults, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=!}"
+                                  SelectionMode="Single"
+                                  SelectedItem="{Binding SelectedConversation, Mode=TwoWay}">
                             <ListView.ItemTemplate>
                                 <DataTemplate>
                                     <Border Padding="10" Margin="0,0,0,8" CornerRadius="8" BorderBrush="{StaticResource ArgusMutedBorderBrush}" BorderThickness="1">

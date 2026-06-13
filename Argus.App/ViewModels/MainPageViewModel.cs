@@ -182,6 +182,16 @@ public partial class MainPageViewModel(
     public partial Conversation? SelectedConversation { get; set; }
 
     [ObservableProperty]
+    public partial string ConversationSearchText { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial bool IsSearchingConversations { get; set; }
+
+    public ObservableCollection<MessageSearchResult> ConversationSearchResults { get; } = new();
+
+    public bool HasConversationSearchResults => ConversationSearchResults.Count > 0;
+
+    [ObservableProperty]
     public partial AiProviderProfile? SelectedProvider { get; set; }
 
     private AiProviderCapabilities? SelectedProviderCapabilities =>
@@ -383,6 +393,31 @@ public partial class MainPageViewModel(
 
     [RelayCommand]
     private void ShowConversations() => CurrentView = "Conversations";
+    [RelayCommand]
+    private async Task SearchConversationsAsync()
+    {
+        if (string.IsNullOrWhiteSpace(ConversationSearchText))
+        {
+            ConversationSearchResults.Clear();
+            OnPropertyChanged(nameof(HasConversationSearchResults));
+            return;
+        }
+
+        IsSearchingConversations = true;
+        try
+        {
+            Replace(ConversationSearchResults, await conversationService.SearchMessagesAsync(ConversationSearchText));
+            OnPropertyChanged(nameof(HasConversationSearchResults));
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Conversation search error: {ex.Message}");
+        }
+        finally
+        {
+            IsSearchingConversations = false;
+        }
+    }
 
     [RelayCommand]
     private void ShowMemories() => CurrentView = "Memories";

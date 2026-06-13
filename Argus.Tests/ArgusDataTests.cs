@@ -406,6 +406,40 @@ public sealed class ArgusDataTests
         Assert.DoesNotContain(backups.GetBackups(), b => b.FilePath == manualResult.BackupPath);
     }
 
+    [Fact]
+    public async Task ConversationMessageSearchUsesFts5Index()
+    {
+        using var provider = CreateProvider();
+        await provider.GetRequiredService<ArgusDatabaseInitializer>().InitializeAsync();
+        var conversations = provider.GetRequiredService<IConversationService>();
+
+        // Add messages with distinct content for testing FTS5
+        var conv = await conversations.CreateConversationAsync("Search test");
+        await conversations.AddMessageAsync(conv.Id, "user", "Argus uses SQLite FTS5 for full-text search across messages.");
+        await conversations.AddMessageAsync(conv.Id, "assistant", "FTS5 is a virtual table extension that provides fast text queries.");
+        await conversations.AddMessageAsync(conv.Id, "user", "The graph canvas renders nodes with Win2D hardware acceleration.");
+
+        // Search should find the FTS5-related message
+        var results = await conversations.SearchMessagesAsync("FTS5 virtual table");
+        Assert.Contains(results, r => r.Content.Contains("FTS5") && r.ConversationTitle == "Search test");
+
+        // Search by single term
+        var sqliteResults = await conversations.SearchMessagesAsync("SQLite");
+        Assert.Contains(sqliteResults, r => r.Content.Contains("SQLite"));
+
+        // No results for nonexistent term
+        var noneResults = await conversations.SearchMessagesAsync("blockchain");
+        Assert.Empty(noneResults);
+
+        // Empty query returns empty
+        var emptyResults = await conversations.SearchMessagesAsync("");
+        Assert.Empty(emptyResults);
+
+        // Verify snippet contains highlight markers
+        var snippetResult = Assert.Single(await conversations.SearchMessagesAsync("Win2D"));
+        Assert.Contains("<mark>", snippetResult.Snippet);
+    }
+
     private static ServiceProvider CreateProvider()
     {
         var path = Path.Combine(Path.GetTempPath(), "ArgusTests", $"{Guid.NewGuid():N}.db");

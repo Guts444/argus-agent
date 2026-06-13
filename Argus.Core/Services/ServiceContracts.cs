@@ -41,7 +41,17 @@ public interface IConversationService
     Task<Message> AddMessageAsync(Guid conversationId, string role, string content, Guid? linkedNodeId = null, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<Message>> GetMessagesAsync(Guid conversationId, CancellationToken cancellationToken = default);
     Task DeleteMessageAsync(Guid messageId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<MessageSearchResult>> SearchMessagesAsync(string query, int take = 20, CancellationToken cancellationToken = default);
 }
+
+public sealed record MessageSearchResult(
+    Guid MessageId,
+    Guid ConversationId,
+    string ConversationTitle,
+    string Role,
+    string Content,
+    string Snippet,
+    DateTimeOffset MessageCreatedAt);
 
 public interface IMemoryService
 {

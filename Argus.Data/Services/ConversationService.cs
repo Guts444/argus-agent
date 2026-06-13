@@ -75,4 +75,65 @@ public sealed class ConversationService(IDbContextFactory<ArgusDbContext> dbCont
             await db.SaveChangesAsync(cancellationToken);
         }
     }
+
+    public async Task<IReadOnlyList<MessageSearchResult>> SearchMessagesAsync(string query, int take = 20, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return Array.Empty<MessageSearchResult>();
+        }
+
+        await using var db = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var connection = db.Database.GetDbConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        // FTS5 query: sanitize input, escape special chars for MATCH
+        var sanitized = query.Replace("\"", "\"\"");
+        var ftsQuery = string.Join(" AND ", sanitized.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Select(term => $"\"{term}\""));
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+                ms.MessageId,
+                m.ConversationId,
+                c.Title AS ConversationTitle,
+                ms.Role,
+                m.Content,
+                snippet(MessageSearch, 2, '<mark>', '</mark>', '…', 40) AS Snippet,
+                m.CreatedAt
+            FROM MessageSearch ms
+            JOIN Messages m ON m.Id = ms.MessageId
+            JOIN Conversations c ON c.Id = m.ConversationId
+            WHERE MessageSearch MATCH @query
+            ORDER BY rank
+            LIMIT @take
+            """;
+
+        var queryParam = command.CreateParameter();
+        queryParam.ParameterName = "@query";
+        queryParam.Value = ftsQuery;
+        command.Parameters.Add(queryParam);
+
+        var takeParam = command.CreateParameter();
+        takeParam.ParameterName = "@take";
+        takeParam.Value = take;
+        command.Parameters.Add(takeParam);
+
+        var results = new List<MessageSearchResult>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(new MessageSearchResult(
+                reader.GetGuid(0),
+                reader.GetGuid(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                new DateTimeOffset(reader.GetInt64(6), TimeSpan.Zero)));
+        }
+
+        return results;
+    }
 }
