@@ -144,15 +144,8 @@
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <Grid ColumnSpacing="12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Spacing="2">
-                            <TextBlock Text="COMMAND CENTER" Style="{StaticResource PanelTitleStyle}" FontSize="24" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <Grid>
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" HorizontalAlignment="Right">
                             <Button Command="{Binding NewNodeCommand}" ToolTipService.ToolTip="New node">
                                 <FontIcon Glyph="&#xE710;" FontSize="14" />
                             </Button>
@@ -323,24 +316,50 @@
                                         </ListView.ItemTemplate>
                                     </ListView>
 
-                                    <!-- Next actions summary -->
-                                    <Border Grid.Row="2" Background="Transparent" VerticalAlignment="Bottom"
-                                            Visibility="{Binding ProjectCockpit.HasGlobalNextActions, Converter={StaticResource BoolToVisibilityConverter}}">
-                                        <StackPanel Spacing="3">
-                                            <TextBlock Text="NEXT ACTIONS" FontFamily="Cascadia Code" FontSize="9"
-                                                       Foreground="{StaticResource ArgusAccentBrush}" Margin="0,6,0,0" />
-                                            <ItemsControl ItemsSource="{Binding ProjectCockpit.GlobalNextActions}">
-                                                <ItemsControl.ItemTemplate>
-                                                    <DataTemplate>
-                                                        <TextBlock FontSize="10" Foreground="{StaticResource ArgusMutedTextBrush}"
-                                                                   TextWrapping="WrapWholeWords" Margin="0,1"
-                                                                   Text="{Binding}" />
-                                                    </DataTemplate>
-                                                </ItemsControl.ItemTemplate>
-                                            </ItemsControl>
-                                        </StackPanel>
-                                    </Border>
                                 </Grid>
+                            </Border>
+
+                            <!-- NEXT ACTIONS -->
+                            <Border Style="{StaticResource DashboardWidgetStyle}"
+                                    Visibility="{Binding ShowProjectNextActionsWidget, Converter={StaticResource BoolToVisibilityConverter}}">
+                                <StackPanel Spacing="10">
+                                    <Grid>
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <Border Width="8" Height="8" CornerRadius="4"
+                                                    Background="{StaticResource ArgusAccentBrush}"
+                                                    VerticalAlignment="Center" />
+                                            <TextBlock Text="NEXT ACTIONS" Style="{StaticResource PanelTitleStyle}" FontSize="14" />
+                                        </StackPanel>
+                                        <Border HorizontalAlignment="Right" Padding="6,2" CornerRadius="4" Background="#2220EAF2">
+                                            <TextBlock Text="{Binding ProjectCockpit.GlobalNextActionCountText}"
+                                                       FontFamily="Cascadia Code" FontSize="10"
+                                                       Foreground="{StaticResource ArgusAccentBrush}" />
+                                        </Border>
+                                    </Grid>
+                                    <ItemsControl ItemsSource="{Binding ProjectCockpit.GlobalNextActions}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Padding="9,7" Margin="0,2" CornerRadius="6"
+                                                        Background="#110A1222"
+                                                        BorderBrush="{StaticResource ArgusMutedBorderBrush}"
+                                                        BorderThickness="1">
+                                                    <Grid ColumnSpacing="8">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto" />
+                                                            <ColumnDefinition Width="*" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <FontIcon Glyph="&#xE73E;" FontSize="11"
+                                                                  Foreground="{StaticResource ArgusAccentBrush}"
+                                                                  VerticalAlignment="Top" Margin="0,2,0,0" />
+                                                        <TextBlock Grid.Column="1" Text="{Binding}" FontSize="11"
+                                                                   Foreground="{StaticResource ArgusTextBrush}"
+                                                                   TextWrapping="WrapWholeWords" />
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
                             </Border>
                         </StackPanel>
 
@@ -616,6 +635,57 @@
                         <FontIcon Glyph="&#xE72C;" />
                     </Button>
                 </StackPanel>
+                <Border Width="330" MaxHeight="420" HorizontalAlignment="Left" VerticalAlignment="Top"
+                        Margin="12" Padding="12" CornerRadius="8"
+                        Background="#E6080D18"
+                        BorderBrush="{StaticResource ArgusMutedBorderBrush}" BorderThickness="1"
+                        Visibility="{Binding SearchText, Converter={StaticResource EmptyStringToVisibilityConverter}}">
+                    <Grid RowSpacing="10">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <Grid>
+                            <TextBlock Text="GRAPH SEARCH" Style="{StaticResource PanelTitleStyle}" FontSize="13" />
+                            <TextBlock HorizontalAlignment="Right" Text="{Binding SearchResults.Count}"
+                                       FontFamily="Cascadia Code" FontSize="10"
+                                       Foreground="{StaticResource ArgusAccentBrush}" />
+                        </Grid>
+                        <Grid Grid.Row="1">
+                            <ListView ItemsSource="{Binding SearchResults}"
+                                      SelectedItem="{Binding SelectedNode, Mode=TwoWay}"
+                                      SelectionMode="Single"
+                                      MaxHeight="350"
+                                      Visibility="{Binding HasSearchResults, Converter={StaticResource BoolToVisibilityConverter}}">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Padding="9" Margin="0,0,0,6" CornerRadius="6"
+                                                Background="#110A1222"
+                                                BorderBrush="{StaticResource ArgusMutedBorderBrush}"
+                                                BorderThickness="1">
+                                            <StackPanel Spacing="3">
+                                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource ArgusTextBrush}" />
+                                                <TextBlock Text="{Binding Type}" Style="{StaticResource MetaTextStyle}" />
+                                                <TextBlock Text="{Binding Summary}" Style="{StaticResource MetaTextStyle}"
+                                                           MaxLines="2" TextTrimming="CharacterEllipsis"
+                                                           TextWrapping="WrapWholeWords" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                            <TextBlock Text="No graph matches found. Try a broader term."
+                                       Style="{StaticResource MetaTextStyle}"
+                                       Foreground="{StaticResource ArgusMutedTextBrush}"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       TextAlignment="Center"
+                                       TextWrapping="WrapWholeWords"
+                                       Visibility="{Binding HasSearchResults, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}" />
+                        </Grid>
+                    </Grid>
+                </Border>
             </Grid>
 
             <Grid Visibility="{Binding CurrentView, Converter={StaticResource ViewVisibilityConverter}, ConverterParameter=Memories}">
@@ -700,7 +770,7 @@
                                    HorizontalAlignment="Center"
                                    VerticalAlignment="Center"
                                    TextWrapping="WrapWholeWords"
-                                   Visibility="{Binding HasMemoryResults, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=!}" />
+                                   Visibility="{Binding HasMemoryResults, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}" />
                     </Grid>
                 </Border>
             </Grid>
@@ -745,7 +815,7 @@
                         <!-- Regular conversation list -->
                         <ListView Grid.Row="1"
                                   ItemsSource="{Binding Conversations}"
-                                  Visibility="{Binding HasConversationSearchResults, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=!}"
+                                  Visibility="{Binding HasConversationSearchResults, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}"
                                   SelectionMode="Single"
                                   SelectedItem="{Binding SelectedConversation, Mode=TwoWay}">
                             <ListView.ItemTemplate>
@@ -767,7 +837,7 @@
                                    HorizontalAlignment="Center"
                                    VerticalAlignment="Center"
                                    TextWrapping="WrapWholeWords"
-                                   Visibility="{Binding HasConversations, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=!}" />
+                                   Visibility="{Binding HasConversations, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}" />
                     </Grid>
                 </Border>
             </Grid>
@@ -890,7 +960,7 @@
                                     <TextBox Text="{Binding SelectedAuditRecord.Error}" IsReadOnly="True" TextWrapping="Wrap" MaxHeight="80" FontSize="11" Foreground="#FF6B6B" Visibility="{Binding SelectedAuditRecord.Error, Converter={StaticResource NullToVisibilityConverter}}" />
                                 </StackPanel>
                                 <TextBlock Text="Select an audit record to view execution details, arguments, and outcomes." Style="{StaticResource MetaTextStyle}" TextWrapping="WrapWholeWords"
-                                           Visibility="{Binding SelectedAuditRecord, Converter={StaticResource NullToVisibilityConverter}, ConverterParameter=!}" />
+                                           Visibility="{Binding SelectedAuditRecord, Converter={StaticResource NullToVisibilityConverter}, ConverterParameter=Invert}" />
                             </StackPanel>
                         </ScrollViewer>
 

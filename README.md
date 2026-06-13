@@ -329,7 +329,10 @@ Argus.Tests  unit and integration coverage
 
 ## Status
 
-Argus `v0.3.1` — hotfix for WinUI binding crash on project cockpit dashboard. Safe TextBlock bindings replace fragile Run elements.
+Argus `v0.3.3` - fixes the v0.3 startup crash caused by an undefined
+`ArgusVioletBrush` resource, moves dashboard next actions into a dedicated
+widget, restores the v0.3 empty states and graph-search results, and adds XAML
+and project-cockpit regression coverage.
 
 ## License
 

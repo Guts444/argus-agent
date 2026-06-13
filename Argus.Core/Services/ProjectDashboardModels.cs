@@ -39,6 +39,8 @@ public sealed record CoherentDashboard(
 {
     public string TotalOpenTasksText => $"{TotalOpenTasks} tasks";
     public string TotalBlockersText => $"{TotalBlockers} blocked";
+    public string GlobalNextActionCountText =>
+        GlobalNextActions.Count == 1 ? "1 priority" : $"{GlobalNextActions.Count} priorities";
     public bool HasGlobalBlockers => GlobalBlockers.Count > 0;
     public bool HasGlobalNextActions => GlobalNextActions.Count > 0;
 }

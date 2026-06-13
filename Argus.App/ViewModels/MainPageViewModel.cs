@@ -201,6 +201,9 @@ public partial class MainPageViewModel(
 
     public bool HasMemoryResults => MemoryRecallResults.Count > 0;
 
+    public bool ShowProjectNextActionsWidget =>
+        ShowProjectsWidget && ProjectCockpit?.HasGlobalNextActions == true;
+
     [ObservableProperty]
     public partial AiProviderProfile? SelectedProvider { get; set; }
 
@@ -485,6 +488,7 @@ public partial class MainPageViewModel(
         var results = await graphService.SearchNodesAsync(SearchText);
         Replace(SearchResults, results);
         OnPropertyChanged(nameof(HasSearchResults));
+        CurrentView = "Graph";
         StatusText = results.Count == 0 ? "No graph matches found." : $"{results.Count} graph matches found.";
     }
 
@@ -2483,6 +2487,12 @@ public partial class MainPageViewModel(
     {
         SaveWidgetSetting("ShowProjectsWidget", value);
         OnPropertyChanged(nameof(Column0Width));
+        OnPropertyChanged(nameof(ShowProjectNextActionsWidget));
+    }
+
+    partial void OnProjectCockpitChanged(CoherentDashboard? value)
+    {
+        OnPropertyChanged(nameof(ShowProjectNextActionsWidget));
     }
 
     partial void OnShowMarketWidgetChanged(bool value)

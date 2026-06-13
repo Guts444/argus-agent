@@ -41,6 +41,7 @@
             <SolidColorBrush x:Key="ArgusMutedTextBrush" Color="#FFA8B7C4" />
             <SolidColorBrush x:Key="ArgusAccentBrush" Color="#FF36F7FF" />
             <SolidColorBrush x:Key="ArgusMagentaBrush" Color="#FFFF4FD8" />
+            <SolidColorBrush x:Key="ArgusVioletBrush" Color="#FFAA60FF" />
             <SolidColorBrush x:Key="ArgusAmberBrush" Color="#FFFFC857" />
 
             <Style x:Key="SidebarButtonStyle" TargetType="Button">
