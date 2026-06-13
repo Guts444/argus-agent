@@ -1476,12 +1476,16 @@ public partial class MainPageViewModel(
 
         var webSearchEnabledStr = await settingsService.GetSettingAsync("IsWebSearchEnabled", "false");
         IsWebSearchEnabled = bool.TryParse(webSearchEnabledStr, out var webSearchEnabled) && webSearchEnabled;
-
-        ShowSystemStatusWidget = bool.TryParse(await settingsService.GetSettingAsync("ShowSystemStatusWidget", "true"), out var b1) ? b1 : true;
-        ShowProjectsWidget = bool.TryParse(await settingsService.GetSettingAsync("ShowProjectsWidget", "true"), out var b2) ? b2 : true;
-        ShowMarketWidget = bool.TryParse(await settingsService.GetSettingAsync("ShowMarketWidget", "true"), out var b3) ? b3 : true;
-        ShowNewsWidget = bool.TryParse(await settingsService.GetSettingAsync("ShowNewsWidget", "true"), out var b4) ? b4 : true;
-        ShowSportsWidget = bool.TryParse(await settingsService.GetSettingAsync("ShowSportsWidget", "true"), out var b5) ? b5 : true;
+        var showSystemDefault = "true"; // System Status always works
+        var showProjectsDefault = string.IsNullOrWhiteSpace(ProjectsRootPath) ? "false" : "true";
+        var showMarketDefault = "false";   // User must configure stock symbols first
+        var showNewsDefault = "true";      // RSS feeds auto-populate without config
+        var showSportsDefault = "false";   // User must configure league/teams first
+        ShowSystemStatusWidget = bool.TryParse(await settingsService.GetSettingAsync("ShowSystemStatusWidget", showSystemDefault), out var b1) ? b1 : true;
+        ShowProjectsWidget = bool.TryParse(await settingsService.GetSettingAsync("ShowProjectsWidget", showProjectsDefault), out var b2) ? b2 : true;
+        ShowMarketWidget = bool.TryParse(await settingsService.GetSettingAsync("ShowMarketWidget", showMarketDefault), out var b3) ? b3 : false;
+        ShowNewsWidget = bool.TryParse(await settingsService.GetSettingAsync("ShowNewsWidget", showNewsDefault), out var b4) ? b4 : true;
+        ShowSportsWidget = bool.TryParse(await settingsService.GetSettingAsync("ShowSportsWidget", showSportsDefault), out var b5) ? b5 : false;
 
         OnPropertyChanged(nameof(Column0Width));
         OnPropertyChanged(nameof(Column2Width));

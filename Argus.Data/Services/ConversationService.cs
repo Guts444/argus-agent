@@ -100,7 +100,7 @@ public sealed class ConversationService(IDbContextFactory<ArgusDbContext> dbCont
                 c.Title AS ConversationTitle,
                 ms.Role,
                 m.Content,
-                snippet(MessageSearch, 2, '<mark>', '</mark>', '…', 40) AS Snippet,
+                snippet(MessageSearch, 3, '<mark>', '</mark>', '…', 40) AS Snippet,
                 m.CreatedAt
             FROM MessageSearch ms
             JOIN Messages m ON m.Id = ms.MessageId
