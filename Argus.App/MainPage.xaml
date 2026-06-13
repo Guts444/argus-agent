@@ -614,6 +614,15 @@
                                 </DataTemplate>
                             </ListView.ItemTemplate>
                         </ListView>
+                        <!-- Empty state: no memory results -->
+                        <TextBlock Grid.Row="2"
+                                   Text="Enter a query above to evaluate memory recall. Results show scored, explainable matches from your local database."
+                                   Style="{StaticResource MetaTextStyle}"
+                                   Foreground="{StaticResource ArgusMutedTextBrush}"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="WrapWholeWords"
+                                   Visibility="{Binding HasMemoryResults, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=!}" />
                     </Grid>
                 </Border>
             </Grid>
@@ -672,6 +681,15 @@
                                 </DataTemplate>
                             </ListView.ItemTemplate>
                         </ListView>
+                        <!-- Empty state: no conversations -->
+                        <TextBlock Grid.Row="1"
+                                   Text="No conversations yet. Start a chat from the dashboard or Telegram."
+                                   Style="{StaticResource MetaTextStyle}"
+                                   Foreground="{StaticResource ArgusMutedTextBrush}"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="WrapWholeWords"
+                                   Visibility="{Binding HasConversations, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=!}" />
                     </Grid>
                 </Border>
             </Grid>

@@ -194,6 +194,12 @@ public partial class MainPageViewModel(
 
     public bool HasConversationSearchResults => ConversationSearchResults.Count > 0;
 
+    public bool HasConversations => Conversations.Count > 0;
+
+    public bool HasSearchResults => SearchResults.Count > 0;
+
+    public bool HasMemoryResults => MemoryRecallResults.Count > 0;
+
     [ObservableProperty]
     public partial AiProviderProfile? SelectedProvider { get; set; }
 
@@ -472,6 +478,7 @@ public partial class MainPageViewModel(
     {
         var results = await graphService.SearchNodesAsync(SearchText);
         Replace(SearchResults, results);
+        OnPropertyChanged(nameof(HasSearchResults));
         StatusText = results.Count == 0 ? "No graph matches found." : $"{results.Count} graph matches found.";
     }
 
@@ -491,6 +498,7 @@ public partial class MainPageViewModel(
         {
             var results = await memoryService.RecallWithDetailsAsync(MemorySearchText, 50);
             Replace(MemoryRecallResults, results.Select(result => new MemoryRecallDisplayItem(result)));
+            OnPropertyChanged(nameof(HasMemoryResults));
             MemoryDebuggerStatusText = results.Count == 0
                 ? "No memories were recalled. Try different wording or save a relevant memory first."
                 : string.IsNullOrWhiteSpace(MemorySearchText)
@@ -1877,6 +1885,7 @@ public partial class MainPageViewModel(
     {
         var selectedId = selectId ?? SelectedConversation?.Id;
         Replace(Conversations, await conversationService.GetConversationsAsync());
+        OnPropertyChanged(nameof(HasConversations));
         SelectedConversation = Conversations.FirstOrDefault(conversation => conversation.Id == selectedId) ?? Conversations.FirstOrDefault();
     }
 
