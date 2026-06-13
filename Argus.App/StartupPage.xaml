@@ -14,8 +14,8 @@
             </RadialGradientBrush>
         </Grid.Background>
 
-        <Border Width="600"
-                MaxWidth="720"
+        <Border Width="640"
+                MaxWidth="760"
                 Padding="34"
                 CornerRadius="16"
                 Background="#E80A1222"
@@ -29,16 +29,18 @@
                     <StackPanel VerticalAlignment="Center" Spacing="2">
                         <TextBlock Text="ARGUS" FontSize="24" FontWeight="SemiBold"
                                    Foreground="{StaticResource ArgusTextBrush}" />
-                        <TextBlock Text="LOCAL WORKSPACE STARTUP"
+                        <TextBlock x:Name="StartupSubtitleText"
+                                   Text="LOCAL WORKSPACE STARTUP"
                                    FontFamily="Cascadia Code"
                                    FontSize="11"
                                    Foreground="{StaticResource ArgusAccentBrush}" />
                     </StackPanel>
                 </StackPanel>
 
-                <Border Height="1" Background="{StaticResource ArgusMutedBorderBrush}" />
+                <Border x:Name="DbProgressSection" Height="1" Background="{StaticResource ArgusMutedBorderBrush}" />
 
-                <StackPanel Spacing="8">
+                <!-- Database init area -->
+                <StackPanel x:Name="DbProgressArea" Spacing="8">
                     <StackPanel Orientation="Horizontal" Spacing="12">
                         <ProgressRing x:Name="StartupProgressRing"
                                       Width="22"
@@ -84,7 +86,187 @@
                     </StackPanel>
                 </Border>
 
-                <TextBlock Text="Your database stays on this PC. Startup backups are stored beside it and only the five newest are retained."
+                <!-- ========== FIRST-RUN WIZARD ========== -->
+                <StackPanel x:Name="WizardSection" Visibility="Collapsed" Spacing="14">
+                    <Border Height="1" Background="{StaticResource ArgusMutedBorderBrush}" />
+
+                    <!-- Step indicator -->
+                    <StackPanel Spacing="4">
+                        <TextBlock x:Name="WizardStepLabel"
+                                   Text="Step 1 of 3"
+                                   FontFamily="Cascadia Code"
+                                   FontSize="10"
+                                   Foreground="{StaticResource ArgusAccentBrush}" />
+                        <TextBlock x:Name="WizardStepTitle"
+                                   Text="Connect an LLM provider"
+                                   Style="{StaticResource PanelTitleStyle}" />
+                        <TextBlock x:Name="WizardStepDescription"
+                                   Text="Choose a provider and enter its credentials. You can change this later in Settings."
+                                   Style="{StaticResource MetaTextStyle}"
+                                   TextWrapping="WrapWholeWords" />
+                    </StackPanel>
+
+                    <!-- Step 1: Provider selection -->
+                    <StackPanel x:Name="WizardStep1" Spacing="10">
+                        <ListView x:Name="ProviderList"
+                                  Height="180"
+                                  SelectionMode="Single"
+                                  SelectionChanged="ProviderList_OnSelectionChanged">
+                            <ListView.ItemContainerStyle>
+                                <Style TargetType="ListViewItem">
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                </Style>
+                            </ListView.ItemContainerStyle>
+                            <ListView.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center" Padding="6,4">
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource ArgusTextBrush}"
+                                                   VerticalAlignment="Center" Width="180" />
+                                        <TextBlock Text="{Binding Description}"
+                                                   Style="{StaticResource MetaTextStyle}"
+                                                   FontSize="11"
+                                                   TextWrapping="NoWrap"
+                                                   VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+
+                        <!-- API key entry -->
+                        <StackPanel x:Name="ApiKeyEntry" Visibility="Collapsed" Spacing="6">
+                            <TextBlock x:Name="ApiKeyLabel"
+                                       Text="API Key"
+                                       Style="{StaticResource MetaTextStyle}"
+                                       FontSize="11" />
+                            <TextBox x:Name="ApiKeyBox"
+                                     PlaceholderText="Enter your API key"
+                                     AcceptsReturn="False"
+                                     MaxHeight="32" />
+                            <TextBlock x:Name="ApiKeyHelpText"
+                                       Style="{StaticResource MetaTextStyle}"
+                                       FontSize="10"
+                                       TextWrapping="WrapWholeWords" />
+                        </StackPanel>
+
+                        <!-- Codex login button -->
+                        <StackPanel x:Name="CodexLoginSection" Visibility="Collapsed" Spacing="6">
+                            <Button x:Name="CodexLoginButton"
+                                    Content="Sign in with ChatGPT"
+                                    Click="CodexLoginButton_OnClick"
+                                    HorizontalAlignment="Stretch" />
+                            <TextBlock x:Name="CodexStatusText"
+                                       Style="{StaticResource MetaTextStyle}"
+                                       FontSize="10"
+                                       TextWrapping="WrapWholeWords" />
+                        </StackPanel>
+
+                        <!-- Local/no-auth notice -->
+                        <StackPanel x:Name="LocalNotice" Visibility="Collapsed">
+                            <TextBlock Text="No API key is needed for localhost endpoints."
+                                       Style="{StaticResource MetaTextStyle}"
+                                       Foreground="{StaticResource ArgusAccentBrush}" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!-- Step 2: Projects folder -->
+                    <StackPanel x:Name="WizardStep2" Visibility="Collapsed" Spacing="10">
+                        <TextBlock Text="Select a projects folder so Argus can scan your local repositories for README previews and Git state. You can skip this and configure it later."
+                                   Style="{StaticResource MetaTextStyle}"
+                                   TextWrapping="WrapWholeWords" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBox x:Name="ProjectsFolderBox"
+                                     PlaceholderText="Projects root folder path..."
+                                     Width="340"
+                                     AcceptsReturn="False"
+                                     IsReadOnly="True"
+                                     MaxHeight="32" />
+                            <Button x:Name="BrowseFolderButton"
+                                    Content="Browse..."
+                                    Click="BrowseFolderButton_OnClick" />
+                        </StackPanel>
+                        <TextBlock x:Name="ProjectsFolderHelpText"
+                                   Style="{StaticResource MetaTextStyle}"
+                                   FontSize="10"
+                                   TextWrapping="WrapWholeWords" />
+                    </StackPanel>
+
+                    <!-- Step 3: Privacy review -->
+                    <StackPanel x:Name="WizardStep3" Visibility="Collapsed" Spacing="10">
+                        <StackPanel Spacing="6">
+                            <CheckBox x:Name="ProjectRedactionCheck"
+                                      Content="Redact local paths and credentials from LLM prompts"
+                                      IsChecked="True"
+                                      Foreground="{StaticResource ArgusTextBrush}" />
+                            <TextBlock Text="Argus removes absolute paths, remote URL credentials, and sensitive filenames from project context before sending it to an LLM."
+                                       Style="{StaticResource MetaTextStyle}"
+                                       FontSize="10"
+                                       TextWrapping="WrapWholeWords"
+                                       Margin="28,0,0,0" />
+                        </StackPanel>
+
+                        <StackPanel Spacing="6">
+                            <CheckBox x:Name="TelegramAllowlistCheck"
+                                      Content="Enforce Telegram user allowlist"
+                                      IsChecked="True"
+                                      Foreground="{StaticResource ArgusTextBrush}" />
+                            <TextBlock Text="Only explicitly allowed Telegram users can interact with Argus. You can add users in Settings after setup."
+                                       Style="{StaticResource MetaTextStyle}"
+                                       FontSize="10"
+                                       TextWrapping="WrapWholeWords"
+                                       Margin="28,0,0,0" />
+                        </StackPanel>
+
+                        <StackPanel Spacing="6">
+                            <CheckBox x:Name="AutoUpdateCheck"
+                                      Content="Check for updates automatically"
+                                      IsChecked="True"
+                                      Foreground="{StaticResource ArgusTextBrush}" />
+                            <TextBlock Text="Argus checks GitHub Releases and verifies the installer SHA-256 digest before launching."
+                                       Style="{StaticResource MetaTextStyle}"
+                                       FontSize="10"
+                                       TextWrapping="WrapWholeWords"
+                                       Margin="28,0,0,0" />
+                        </StackPanel>
+
+                        <TextBlock x:Name="PrivacySummaryText"
+                                   Style="{StaticResource MetaTextStyle}"
+                                   FontSize="10"
+                                   TextWrapping="WrapWholeWords"
+                                   Foreground="{StaticResource ArgusAccentBrush}" />
+                    </StackPanel>
+
+                    <!-- Navigation buttons -->
+                    <StackPanel Orientation="Horizontal" Spacing="8"
+                                HorizontalAlignment="Right">
+                        <Button x:Name="WizardBackButton"
+                                Content="Back"
+                                Click="WizardBackButton_OnClick"
+                                Visibility="Collapsed" />
+                        <Button x:Name="WizardNextButton"
+                                Content="Next"
+                                Click="WizardNextButton_OnClick"
+                                Style="{StaticResource AccentButtonStyle}" />
+                        <Button x:Name="WizardFinishButton"
+                                Content="Get Started"
+                                Click="WizardFinishButton_OnClick"
+                                Style="{StaticResource AccentButtonStyle}"
+                                Visibility="Collapsed" />
+                        <Button x:Name="WizardSkipButton"
+                                Content="Skip all"
+                                Click="WizardSkipButton_OnClick"
+                                Visibility="Collapsed" />
+                    </StackPanel>
+
+                    <TextBlock x:Name="WizardErrorText"
+                               Visibility="Collapsed"
+                               Style="{StaticResource MetaTextStyle}"
+                               Foreground="{StaticResource ArgusAmberBrush}"
+                               TextWrapping="WrapWholeWords" />
+                </StackPanel>
+
+                <TextBlock x:Name="FooterText"
+                           Text="Your database stays on this PC. Startup backups are stored beside it and only the five newest are retained."
                            Style="{StaticResource MetaTextStyle}"
                            FontSize="10"
                            TextWrapping="WrapWholeWords" />
