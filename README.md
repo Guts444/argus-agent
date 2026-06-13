@@ -329,7 +329,7 @@ Argus.Tests  unit and integration coverage
 
 ## Status
 
-Argus `v0.2.0` adds provider adapter architecture, fail-closed tool approval with durable audit trails, scored memory recall with feedback, OpenAI ChatGPT login via Codex, Anthropic API support, non-blocking startup with verified backups, project context privacy redaction, database maintenance dashboard, and a comprehensive test suite.
+Argus `v0.3.0` adds a first-run setup wizard, coherent project cockpit with repo health and blocker detection, conversation search, smart widget defaults, per-source context token breakdown, and empty-state placeholders. 54 tests green.
 
 ## License
 
