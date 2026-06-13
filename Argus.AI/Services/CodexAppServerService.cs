@@ -342,7 +342,7 @@ public sealed class CodexAppServerService : IOpenAiCodexService, IAsyncDisposabl
                 "initialize",
                 new
                 {
-                    clientInfo = new { name = "argus", title = "Argus", version = "0.3.1" },
+                    clientInfo = new { name = "argus", title = "Argus", version = "0.3.2" },
                     capabilities = new { experimentalApi = false }
                 },
                 cancellationToken);

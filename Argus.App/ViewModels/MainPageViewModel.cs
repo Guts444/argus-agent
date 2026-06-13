@@ -1662,15 +1662,33 @@ public partial class MainPageViewModel(
     private async Task LoadDashboardAsync()
     {
         Dashboard = await graphService.GetDashboardAsync();
-        await LoadProjectCockpitAsync();
+        _ = LoadProjectCockpitDeferredAsync();
     }
 
-    private async Task LoadProjectCockpitAsync()
+    /// <summary>
+    /// Load the project cockpit on the UI thread after the dashboard has rendered.
+    /// Deferred to avoid binding evaluation during the initial async load storm.
+    /// </summary>
+    private async Task LoadProjectCockpitDeferredAsync()
     {
         try
         {
-            ProjectCockpit = await projectDashboardService.BuildAsync();
-            Replace(ProjectCockpitCards, ProjectCockpit?.ProjectCards ?? []);
+            // Run the heavy DB/computation work on a background thread
+            var cockpit = await Task.Run(() => projectDashboardService.BuildAsync());
+
+            // Dispatch UI updates to the main thread
+            App.DispatcherQueue.TryEnqueue(() =>
+            {
+                try
+                {
+                    ProjectCockpit = cockpit;
+                    Replace(ProjectCockpitCards, cockpit?.ProjectCards ?? []);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Project cockpit UI update failed: {ex.Message}");
+                }
+            });
         }
         catch (Exception ex)
         {
