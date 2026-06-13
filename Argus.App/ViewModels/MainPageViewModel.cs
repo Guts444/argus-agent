@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Net.Http.Headers;
 using System.Reflection;
 using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -9,6 +8,7 @@ using Argus.Core.Models;
 using Argus.Core.Services;
 using Argus.AI.Services;
 using Argus.App.Services;
+using Argus.Data.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.System;
@@ -24,16 +24,24 @@ public partial class MainPageViewModel(
     IConversationService conversationService,
     IMemoryService memoryService,
     ISettingsService settingsService,
+    IOpenAiCodexService openAiCodexService,
+    IAiProviderRegistry aiProviderRegistry,
     IAiChatService aiChatService,
     IAgentService agentService,
     IToolService toolService,
     ITelegramGatewayService telegramGatewayService,
     IAppUpdateService appUpdateService,
-    HttpClient httpClient,
-    ISecretStore secretStore) : ObservableObject
+    ISecretStore secretStore,
+    IToolExecutionAuditService auditService,
+    DatabaseBackupService databaseBackupService) : ObservableObject
 {
     private bool initialized;
     private bool suppressSelectedModelUpdate;
+    private bool suppressReasoningEffortUpdate;
+    private bool suppressSelectedProviderSideEffects;
+    private long modelLoadVersion;
+    private CancellationTokenSource? selectedNodeRefreshCancellation;
+    private readonly SemaphoreSlim providerPreferenceSaveLock = new(1, 1);
     private readonly List<CommandPaletteItem> paletteItems = new();
     private readonly Dictionary<string, AiModelMetadata> modelMetadata = new(StringComparer.OrdinalIgnoreCase);
 
@@ -43,13 +51,14 @@ public partial class MainPageViewModel(
     public ObservableCollection<NodeConnection> Connections { get; } = new();
     public ObservableCollection<Conversation> Conversations { get; } = new();
     public ObservableCollection<Message> ChatMessages { get; } = new();
-    public ObservableCollection<Memory> Memories { get; } = new();
+    public ObservableCollection<MemoryRecallDisplayItem> MemoryRecallResults { get; } = new();
     public ObservableCollection<AiProviderProfile> ProviderProfiles { get; } = new();
     public ObservableCollection<string> AvailableTools { get; } = new();
     public ObservableCollection<string> ModelOptions { get; } = new();
     public ObservableCollection<CommandPaletteItem> CommandPaletteItems { get; } = new();
     public ObservableCollection<Tag> SelectedNodeTags { get; } = new();
     public ObservableCollection<ProjectContext> ProjectContexts { get; } = new();
+    public ObservableCollection<string> ReasoningEffortOptions { get; } = new();
 
     public IReadOnlyList<string> NodeTypes { get; } = new[]
     {
@@ -62,8 +71,6 @@ public partial class MainPageViewModel(
     };
 
     public IReadOnlyList<string> ThinkingModeOptions { get; } = new[] { "enabled", "disabled" };
-
-    public IReadOnlyList<string> ReasoningEffortOptions { get; } = new[] { "none", "minimal", "low", "medium", "high", "xhigh", "max" };
 
     public string VersionDisplayText { get; } = BuildVersionDisplayText();
 
@@ -97,6 +104,13 @@ public partial class MainPageViewModel(
 
     [ObservableProperty]
     public partial string MemorySearchText { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string MemoryDebuggerStatusText { get; set; } =
+        "Enter a question to inspect which memories Argus recalls and why.";
+
+    [ObservableProperty]
+    public partial bool IsMemoryDebuggerBusy { get; set; }
 
     [ObservableProperty]
     public partial string ChatInput { get; set; } = string.Empty;
@@ -170,21 +184,21 @@ public partial class MainPageViewModel(
     [ObservableProperty]
     public partial AiProviderProfile? SelectedProvider { get; set; }
 
-    public bool IsApiKeyRequired => SelectedProvider is not null && 
-        !IsTrustedLocalEndpoint(SelectedProvider.BaseUrl);
+    private AiProviderCapabilities? SelectedProviderCapabilities =>
+        SelectedProvider is null ? null : aiProviderRegistry.GetCapabilities(SelectedProvider);
 
-    private static bool IsTrustedLocalEndpoint(string baseUrl)
-    {
-        if (string.IsNullOrWhiteSpace(baseUrl) || !Uri.TryCreate(baseUrl.Trim(), UriKind.Absolute, out var uri))
-        {
-            return false;
-        }
+    public bool IsOpenAiCodexProvider =>
+        SelectedProviderCapabilities?.Kind == AiProviderKind.OpenAiCodex;
 
-        return uri.Scheme is "http" or "https" &&
-            (uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
-             uri.Host == "127.0.0.1" ||
-             uri.Host == "::1");
-    }
+    public bool IsAnthropicProvider =>
+        SelectedProviderCapabilities?.Kind == AiProviderKind.Anthropic;
+
+    public bool IsApiKeyRequired =>
+        SelectedProviderCapabilities?.AuthenticationMode == AiAuthenticationMode.ApiKey;
+
+    public string ProviderAuthenticationHelpText =>
+        SelectedProviderCapabilities?.AuthenticationHelpText ??
+        "Select an LLM provider to see its authentication requirements.";
 
     [ObservableProperty]
     public partial string SelectedModel { get; set; } = string.Empty;
@@ -232,14 +246,51 @@ public partial class MainPageViewModel(
     public partial CommandPaletteItem? SelectedCommandPaletteItem { get; set; }
 
     public bool HasSelectedNode => SelectedNode is not null;
+    public bool HasReasoningEffortOptions => ReasoningEffortOptions.Count > 0;
+    public bool CanToggleThinkingMode =>
+        SelectedProviderCapabilities?.SupportsThinkingToggle == true;
+    public bool HasReasoningControls => CanToggleThinkingMode || HasReasoningEffortOptions;
+    public bool ShowReasoningEffortPicker =>
+        HasReasoningEffortOptions && (!CanToggleThinkingMode || IsThinkingEnabled);
+
+    public string ReasoningCapabilityHelpText =>
+        SelectedProviderCapabilities?.ReasoningHelpText ?? string.Empty;
+
+    public string SelectedReasoningEffort
+    {
+        get => SelectedProvider?.ReasoningEffort ?? string.Empty;
+        set
+        {
+            if (suppressReasoningEffortUpdate ||
+                SelectedProvider is null ||
+                string.IsNullOrWhiteSpace(value) ||
+                string.Equals(SelectedProvider.ReasoningEffort, value, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            SelectedProvider.ReasoningEffort = value;
+            if (!CanToggleThinkingMode)
+            {
+                SelectedProvider.ThinkingMode = value.Equals("none", StringComparison.OrdinalIgnoreCase)
+                    ? "disabled"
+                    : "enabled";
+            }
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsThinkingEnabled));
+            OnPropertyChanged(nameof(ShowReasoningEffortPicker));
+            _ = SaveProviderPreferenceAsync(SelectedProvider);
+        }
+    }
 
     partial void OnSelectedNodeChanged(Node? value)
     {
         OnPropertyChanged(nameof(HasSelectedNode));
         OnPropertyChanged(nameof(IsSelectedNodePinned));
-        _ = LoadConnectionsAsync(value?.Id);
-        _ = LoadSelectedNodeTagsAsync(value?.Id);
-        _ = LoadProjectContextAsync(value);
+        selectedNodeRefreshCancellation?.Cancel();
+        selectedNodeRefreshCancellation?.Dispose();
+        selectedNodeRefreshCancellation = new CancellationTokenSource();
+        _ = RefreshSelectedNodeAsync(value, selectedNodeRefreshCancellation.Token);
     }
 
     private readonly HashSet<Guid> pinnedNodeIds = new();
@@ -389,9 +440,82 @@ public partial class MainPageViewModel(
     [RelayCommand]
     private async Task SearchMemoriesAsync()
     {
-        var results = await memoryService.SearchMemoriesAsync(MemorySearchText, 100);
-        Replace(Memories, results);
-        StatusText = results.Count == 0 ? "No memories matched." : $"{results.Count} memories recalled.";
+        if (IsMemoryDebuggerBusy)
+        {
+            return;
+        }
+
+        IsMemoryDebuggerBusy = true;
+        MemoryDebuggerStatusText = string.IsNullOrWhiteSpace(MemorySearchText)
+            ? "Loading recent memories..."
+            : "Evaluating memory recall...";
+        try
+        {
+            var results = await memoryService.RecallWithDetailsAsync(MemorySearchText, 50);
+            Replace(MemoryRecallResults, results.Select(result => new MemoryRecallDisplayItem(result)));
+            MemoryDebuggerStatusText = results.Count == 0
+                ? "No memories were recalled. Try different wording or save a relevant memory first."
+                : string.IsNullOrWhiteSpace(MemorySearchText)
+                    ? $"Showing {results.Count} recent memories ranked by importance and recency."
+                    : $"Recalled {results.Count} memories. Scores show the retrieval evidence used for this query.";
+            StatusText = results.Count == 0
+                ? "No memories recalled."
+                : $"{results.Count} memories recalled with explanations.";
+        }
+        catch (Exception ex)
+        {
+            MemoryDebuggerStatusText = $"Memory evaluation failed: {ex.Message}";
+            StatusText = "Memory evaluation failed.";
+        }
+        finally
+        {
+            IsMemoryDebuggerBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    private async Task ShowRecentMemoriesAsync()
+    {
+        MemorySearchText = string.Empty;
+        await SearchMemoriesAsync();
+    }
+
+    [RelayCommand]
+    private Task MarkMemoryUsefulAsync(MemoryRecallDisplayItem? item)
+    {
+        return SaveMemoryRecallFeedbackAsync(item, "useful", "Marked useful.");
+    }
+
+    [RelayCommand]
+    private Task MarkMemoryNotRelevantAsync(MemoryRecallDisplayItem? item)
+    {
+        return SaveMemoryRecallFeedbackAsync(item, "not_relevant", "Marked not relevant.");
+    }
+
+    private async Task SaveMemoryRecallFeedbackAsync(
+        MemoryRecallDisplayItem? item,
+        string rating,
+        string confirmation)
+    {
+        if (item is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await memoryService.SaveRecallFeedbackAsync(
+                MemorySearchText,
+                item.Recall.Memory.Id,
+                rating);
+            item.FeedbackText = confirmation;
+            MemoryDebuggerStatusText =
+                "Feedback saved locally. It is available for retrieval evaluation and future ranking improvements.";
+        }
+        catch (Exception ex)
+        {
+            MemoryDebuggerStatusText = $"Could not save recall feedback: {ex.Message}";
+        }
     }
 
     [RelayCommand]
@@ -589,7 +713,6 @@ public partial class MainPageViewModel(
             var webConversationId = SelectedConversation!.Id;
             var webUserMessage = await conversationService.AddMessageAsync(webConversationId, "user", content, SelectedNode?.Id);
             ChatMessages.Add(webUserMessage);
-            await PersistChatMessageAsMemoryNodeAsync(webUserMessage);
 
             IsBusy = true;
 
@@ -731,9 +854,7 @@ public partial class MainPageViewModel(
                 : webResult.Content;
             var webAssistantMessage = await conversationService.AddMessageAsync(webConversationId, "assistant", webAssistantText, SelectedNode?.Id);
             ChatMessages.Add(webAssistantMessage);
-            await PersistChatMessageAsMemoryNodeAsync(webAssistantMessage);
             await LoadConversationsAsync(selectId: webConversationId);
-            await LoadGraphAsync();
             return;
         }
 
@@ -748,7 +869,6 @@ public partial class MainPageViewModel(
         var linkedNodeId = SelectedNode?.Id;
         var userMessage = await conversationService.AddMessageAsync(conversationId, "user", content, linkedNodeId);
         ChatMessages.Add(userMessage);
-        await PersistChatMessageAsMemoryNodeAsync(userMessage);
 
         IsBusy = true;
 
@@ -877,7 +997,6 @@ public partial class MainPageViewModel(
             // Add final answer
             var assistantMessage = await conversationService.AddMessageAsync(conversationId, "assistant", agentResult.FinalAnswer, linkedNodeId);
             ChatMessages.Add(assistantMessage);
-            await PersistChatMessageAsMemoryNodeAsync(assistantMessage);
             await LoadConversationsAsync(selectId: conversationId);
             await LoadGraphAsync();
         }
@@ -948,9 +1067,7 @@ public partial class MainPageViewModel(
             var assistantText = result.Error is not null ? $"LLM error: {result.Error}" : result.Content;
             var assistantMessage = await conversationService.AddMessageAsync(conversationId, "assistant", assistantText, linkedNodeId);
             ChatMessages.Add(assistantMessage);
-            await PersistChatMessageAsMemoryNodeAsync(assistantMessage);
             await LoadConversationsAsync(selectId: conversationId);
-            await LoadGraphAsync();
         }
     }
 
@@ -962,7 +1079,7 @@ public partial class MainPageViewModel(
             return;
         }
 
-        await memoryService.SaveMemoryAsync(message.Content, $"chat:{message.Role}", 4, message.LinkedNodeId);
+        await memoryService.SaveMemoryAsync(message.Content, $"chat-manual:{message.Role}", 4, message.LinkedNodeId);
         await SearchMemoriesAsync();
         StatusText = "Message saved as memory.";
     }
@@ -1002,12 +1119,12 @@ public partial class MainPageViewModel(
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(SelectedProvider.ApiKeyStorageKey))
+        if (IsApiKeyRequired && string.IsNullOrWhiteSpace(SelectedProvider.ApiKeyStorageKey))
         {
             SelectedProvider.ApiKeyStorageKey = $"ai.{SelectedProvider.Name.ToLowerInvariant().Replace(' ', '-')}.api_key";
         }
 
-        if (!string.IsNullOrWhiteSpace(ApiKeyInput))
+        if (IsApiKeyRequired && !string.IsNullOrWhiteSpace(ApiKeyInput))
         {
             // API keys are stored outside SQLite in the Windows Credential Locker.
             await secretStore.SetSecretAsync(SelectedProvider.ApiKeyStorageKey, ApiKeyInput);
@@ -1016,7 +1133,6 @@ public partial class MainPageViewModel(
 
         var saved = await settingsService.SaveAiProviderProfileAsync(SelectedProvider);
         await LoadProvidersAsync(saved.Id);
-        await LoadModelOptionsForSelectedProviderAsync(forceRefresh: false);
         await UpdateApiKeyPlaceholderAsync(SelectedProvider);
         SettingsStatus = "LLM settings saved.";
     }
@@ -1037,10 +1153,62 @@ public partial class MainPageViewModel(
     }
 
     [RelayCommand]
-    private async Task OpenOpenAiLoginAsync()
+    private async Task SignInOpenAiCodexAsync()
     {
-        await Launcher.LaunchUriAsync(new Uri("https://platform.openai.com/api-keys"));
-        SettingsStatus = "Opened OpenAI account sign-in. Create or copy an API key, save it here, then refresh models.";
+        if (!IsOpenAiCodexProvider)
+        {
+            return;
+        }
+
+        try
+        {
+            SettingsStatus = "Starting ChatGPT sign-in through the official Codex CLI...";
+            var login = await openAiCodexService.StartLoginAsync();
+            if (!login.Started ||
+                string.IsNullOrWhiteSpace(login.LoginId) ||
+                !Uri.TryCreate(login.AuthorizationUrl, UriKind.Absolute, out var authorizationUri))
+            {
+                SettingsStatus = login.Status;
+                return;
+            }
+
+            if (!await Launcher.LaunchUriAsync(authorizationUri))
+            {
+                SettingsStatus = $"Open this URL to finish sign-in: {login.AuthorizationUrl}";
+                return;
+            }
+
+            SettingsStatus = "Waiting for ChatGPT sign-in to complete in the browser...";
+            var account = await openAiCodexService.CompleteLoginAsync(login.LoginId, TimeSpan.FromMinutes(5));
+            SettingsStatus = account.Status;
+            if (account.IsAuthenticated)
+            {
+                await LoadModelOptionsForSelectedProviderAsync(forceRefresh: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            SettingsStatus = $"ChatGPT sign-in could not finish in Argus: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task SignOutOpenAiCodexAsync()
+    {
+        if (!IsOpenAiCodexProvider)
+        {
+            return;
+        }
+
+        try
+        {
+            await openAiCodexService.LogoutAsync();
+            SettingsStatus = "Signed out of the ChatGPT account used by Codex.";
+        }
+        catch (Exception ex)
+        {
+            SettingsStatus = $"Could not sign out of Codex: {ex.Message}";
+        }
     }
 
     [RelayCommand]
@@ -1112,13 +1280,7 @@ public partial class MainPageViewModel(
             $$"""
             Summarize this local project for a personal knowledge graph.
 
-            Project: {{context.Name}}
-            Path: {{context.Path}}
-            State:
-            {{context.StateSummary}}
-
-            README:
-            {{context.ReadmePreview}}
+            {{ProjectContextPrivacy.BuildOutboundPreview(context)}}
 
             Return:
             - one concise summary sentence
@@ -1300,6 +1462,9 @@ public partial class MainPageViewModel(
             });
         };
 
+        await RefreshDatabaseInfoAsync();
+        await LoadAuditsAsync();
+
         _ = CheckForUpdatesAsync();
     }
 
@@ -1376,12 +1541,24 @@ public partial class MainPageViewModel(
         var memoryContext = memories.Count == 0
             ? "No matching memories."
             : string.Join(Environment.NewLine, memories.Select(memory => $"- {memory.Text}"));
-        var projectContext = SelectedNode is null
-            ? "No selected project node."
-            : ProjectContextText;
+        var selectedProjectContext = SelectedNode?.Type.Equals(
+            "Project",
+            StringComparison.OrdinalIgnoreCase) == true
+            ? await projectContextService.GetProjectContextAsync(SelectedNode.Title)
+            : null;
+        var projectContext = selectedProjectContext is not null
+            ? ProjectContextPrivacy.BuildOutboundPreview(selectedProjectContext)
+            : SelectedNode?.Type.Equals("Project", StringComparison.OrdinalIgnoreCase) == true
+                ? $"Project: {SelectedNode.Title}{Environment.NewLine}Graph summary: {SelectedNode.Summary}{Environment.NewLine}No current local folder context is available."
+                : SelectedNode is null
+                    ? "No selected project node."
+                    : ProjectContextText;
         var knownProjects = ProjectContexts.Count == 0
             ? "No local projects scanned."
-            : string.Join(Environment.NewLine, ProjectContexts.Take(24).Select(project => $"- {project.Name}: {project.StateSummary.Replace(Environment.NewLine, " | ")}"));
+            : string.Join(
+                Environment.NewLine,
+                ProjectContexts.Take(24).Select(project =>
+                    $"- {project.Name}: {ProjectContextPrivacy.SanitizeStateSummary(project.StateSummary).Replace(Environment.NewLine, " | ")}"));
 
         return new List<AiChatTurn>
         {
@@ -1463,31 +1640,48 @@ public partial class MainPageViewModel(
         TagEditorText = string.Join(", ", tags.Select(tag => tag.Name));
     }
 
-    private async Task LoadProjectContextAsync(Node? node)
+    private async Task RefreshSelectedNodeAsync(Node? node, CancellationToken cancellationToken)
     {
         if (node is null)
         {
+            Connections.Clear();
+            SelectedNodeTags.Clear();
+            TagEditorText = string.Empty;
             ProjectContextText = "Select a project node to inspect README, GitHub remote, and working tree state.";
             return;
         }
 
-        var context = await projectContextService.GetProjectContextAsync(node.Title);
-        if (context is null)
+        try
         {
-            ProjectContextText = "No matching local project folder found.";
-            return;
+            var connectionsTask = graphService.GetConnectionsAsync(node.Id, cancellationToken);
+            var tagsTask = tagService.GetNodeTagsAsync(node.Id, cancellationToken);
+            var projectTask = node.Type.Equals("Project", StringComparison.OrdinalIgnoreCase)
+                ? projectContextService.GetProjectContextAsync(node.Title, cancellationToken)
+                : Task.FromResult<ProjectContext?>(null);
+
+            await Task.WhenAll(connectionsTask, tagsTask, projectTask);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (SelectedNode?.Id != node.Id)
+            {
+                return;
+            }
+
+            var tags = await tagsTask;
+            Replace(Connections, await connectionsTask);
+            Replace(SelectedNodeTags, tags);
+            TagEditorText = string.Join(", ", tags.Select(tag => tag.Name));
+            ProjectContextText = BuildInspectorContext(node, await projectTask);
         }
-
-        ProjectContextText =
-            $$"""
-            {{context.Name}}
-            {{context.Path}}
-
-            {{context.StateSummary}}
-
-            README preview:
-            {{context.ReadmePreview}}
-            """;
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            if (SelectedNode?.Id == node.Id)
+            {
+                StatusText = $"Could not load node details: {ex.Message}";
+            }
+        }
     }
 
     private async Task SyncProjectsFromWorkspaceAsync()
@@ -1496,11 +1690,22 @@ public partial class MainPageViewModel(
         Replace(ProjectContexts, contexts);
 
         var graph = await graphService.GetGraphAsync();
-        var existingTitles = graph.Nodes.Select(node => node.Title).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var context in contexts)
         {
-            if (existingTitles.Contains(context.Name))
+            var readmeTitle = ExtractReadmeTitle(context.ReadmePreview);
+            var existingProject = graph.Nodes.FirstOrDefault(node =>
+                node.Type.Equals("Project", StringComparison.OrdinalIgnoreCase) &&
+                (node.Title.Equals(context.Name, StringComparison.OrdinalIgnoreCase) ||
+                 (!string.IsNullOrWhiteSpace(readmeTitle) &&
+                  node.Title.Equals(readmeTitle, StringComparison.OrdinalIgnoreCase))));
+            if (existingProject is not null)
             {
+                existingProject.Summary = BuildProjectSummary(context);
+                existingProject.Body = BuildProjectBody(context);
+                existingProject.Status = context.HasUncommittedChanges ? "Active" : "Scanned";
+                existingProject.UpdatedAt = DateTimeOffset.UtcNow;
+                existingProject.LastTouchedAt = DateTimeOffset.UtcNow;
+                await graphService.UpdateNodeAsync(existingProject);
                 continue;
             }
 
@@ -1508,8 +1713,8 @@ public partial class MainPageViewModel(
             {
                 Title = context.Name,
                 Type = "Project",
-                Summary = FirstLine(context.ReadmePreview),
-                Body = $"{context.StateSummary}{Environment.NewLine}{Environment.NewLine}{context.ReadmePreview}",
+                Summary = BuildProjectSummary(context),
+                Body = BuildProjectBody(context),
                 Status = context.HasUncommittedChanges ? "Active" : "Scanned",
                 Importance = context.ReadmePath is null ? 2 : 3,
                 ColorKey = context.GitRemote?.Contains("github.com", StringComparison.OrdinalIgnoreCase) == true ? "blue" : "cyan",
@@ -1518,38 +1723,99 @@ public partial class MainPageViewModel(
         }
     }
 
-    private async Task PersistChatMessageAsMemoryNodeAsync(Message message)
+    private static string BuildInspectorContext(Node node, ProjectContext? context)
     {
-        if (string.IsNullOrWhiteSpace(message.Content))
+        if (!node.Type.Equals("Project", StringComparison.OrdinalIgnoreCase))
         {
-            return;
+            var details = string.IsNullOrWhiteSpace(node.Body) ||
+                string.Equals(node.Body, node.Summary, StringComparison.Ordinal)
+                ? node.Summary
+                : $"{node.Summary}{Environment.NewLine}{Environment.NewLine}{node.Body}";
+            return $"{node.Type} · {node.Status}{Environment.NewLine}{Environment.NewLine}{details}";
         }
 
-        var source = $"chat:{message.Role}";
-        var memory = await memoryService.SaveMemoryAsync(message.Content, source, message.Role == "assistant" ? 4 : 3, message.LinkedNodeId);
-        var title = message.Content.Trim().ReplaceLineEndings(" ");
-        if (title.Length > 70)
+        if (context is null)
         {
-            title = title[..70];
+            return
+                $$"""
+                {{node.Title}}
+
+                No matching folder was found under the configured projects directory.
+
+                Graph summary:
+                {{node.Summary}}
+
+                Rescan Projects after changing the projects directory or README title.
+                """;
         }
 
-        await graphService.CreateNodeAsync(new Node
+        var suggestions = new List<string>();
+        if (context.HasUncommittedChanges)
         {
-            Title = title,
-            Type = "Memory",
-            Summary = message.Content.Length > 220 ? message.Content[..220] : message.Content,
-            Body = message.Content,
-            Status = "Captured",
-            Importance = message.Role == "assistant" ? 4 : 3,
-            ColorKey = message.Role == "assistant" ? "violet" : "blue",
-            IconKey = "memory",
-            LastTouchedAt = memory.CreatedAt
-        });
+            suggestions.Add("Review the local changes and decide what should be committed.");
+        }
+        if (context.ReadmePath is null)
+        {
+            suggestions.Add("Add a concise README with current status and setup instructions.");
+        }
+        if (string.IsNullOrWhiteSpace(context.GitRemote))
+        {
+            suggestions.Add("Confirm whether this project should remain local-only or have a Git remote.");
+        }
+        suggestions.Add("Record the next concrete action, blocker, or decision in Argus.");
+
+        return
+            $$"""
+            {{context.Name}}
+            {{context.Path}}
+
+            {{context.StateSummary}}
+
+            README preview:
+            {{context.ReadmePreview}}
+
+            External provider preview:
+            {{ProjectContextPrivacy.BuildOutboundPreview(context)}}
+
+            Suggested next actions:
+            {{string.Join(Environment.NewLine, suggestions.Select(item => $"- {item}"))}}
+            """;
     }
 
     private static string FirstLine(string text)
     {
         return text.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "Local project";
+    }
+
+    private static string BuildProjectSummary(ProjectContext context)
+    {
+        return context.ReadmePreview
+            .Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .FirstOrDefault(line => !line.StartsWith('#') && line.Length >= 16)
+            ?? FirstLine(context.ReadmePreview);
+    }
+
+    private static string BuildProjectBody(ProjectContext context)
+    {
+        return
+            $$"""
+            Local path: {{context.Path}}
+
+            {{context.StateSummary}}
+
+            README:
+            {{context.ReadmePreview}}
+            """;
+    }
+
+    private static string ExtractReadmeTitle(string readmePreview)
+    {
+        var heading = readmePreview
+            .Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .FirstOrDefault(line => line.StartsWith("# ", StringComparison.Ordinal));
+        return heading is null ? string.Empty : heading[2..].Trim();
     }
 
     private async Task LoadConversationsAsync(Guid? selectId = null)
@@ -1573,48 +1839,46 @@ public partial class MainPageViewModel(
     private async Task LoadProvidersAsync(Guid? selectedId = null)
     {
         Replace(ProviderProfiles, await settingsService.GetAiProviderProfilesAsync());
-        SelectedProvider = ProviderProfiles.FirstOrDefault(profile => profile.Id == selectedId)
-            ?? ProviderProfiles.FirstOrDefault(profile => profile.IsDefault)
-            ?? ProviderProfiles.FirstOrDefault();
+        suppressSelectedProviderSideEffects = true;
+        try
+        {
+            SelectedProvider = ProviderProfiles.FirstOrDefault(profile => profile.Id == selectedId)
+                ?? ProviderProfiles.FirstOrDefault(profile => profile.IsDefault)
+                ?? ProviderProfiles.FirstOrDefault();
+        }
+        finally
+        {
+            suppressSelectedProviderSideEffects = false;
+        }
+
         await LoadModelOptionsForSelectedProviderAsync(forceRefresh: false);
+        await UpdateApiKeyPlaceholderAsync(SelectedProvider);
+        await UpdateProviderAuthenticationStatusAsync(SelectedProvider);
     }
 
     private async Task LoadModelOptionsForSelectedProviderAsync(bool forceRefresh)
     {
+        var loadVersion = Interlocked.Increment(ref modelLoadVersion);
+        var profile = SelectedProvider;
         ModelOptions.Clear();
         modelMetadata.Clear();
-        if (SelectedProvider is null)
+        if (profile is null)
         {
+            RefreshReasoningEffortOptions();
             UpdateContextTracker(null, 0);
             return;
         }
 
-        IReadOnlyList<AiModelMetadata> models = [];
-        if (AiModelCatalog.IsDeepSeekProvider(SelectedProvider.ProviderType, SelectedProvider.BaseUrl))
+        var models = await aiProviderRegistry.ListModelsAsync(profile, forceRefresh);
+
+        if (loadVersion != Volatile.Read(ref modelLoadVersion) || SelectedProvider?.Id != profile.Id)
         {
-            models = AiModelCatalog.DeepSeekModels;
-        }
-        else if (AiModelCatalog.IsOpenRouterProvider(SelectedProvider.ProviderType, SelectedProvider.BaseUrl))
-        {
-            models = await LoadOpenRouterModelsAsync(forceRefresh);
-        }
-        else if (AiModelCatalog.IsOpenAiProvider(SelectedProvider.ProviderType, SelectedProvider.BaseUrl))
-        {
-            models = await LoadOpenAiModelsAsync(forceRefresh);
-        }
-        else if (SelectedProvider.ProviderType.Equals("Anthropic", StringComparison.OrdinalIgnoreCase) ||
-                 SelectedProvider.BaseUrl.Contains("api.anthropic.com", StringComparison.OrdinalIgnoreCase))
-        {
-            models = AiModelCatalog.AnthropicModels;
-        }
-        else
-        {
-            models = await LoadOpenAiCompatibleModelsAsync(forceRefresh);
+            return;
         }
 
         if (models.Count == 0)
         {
-            models = AiModelCatalog.GetKnownModels(SelectedProvider.ProviderType, SelectedProvider.BaseUrl);
+            models = aiProviderRegistry.GetFallbackModels(profile);
         }
 
         foreach (var model in models)
@@ -1626,210 +1890,36 @@ public partial class MainPageViewModel(
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(SelectedProvider.Model) &&
-            !ModelOptions.Contains(SelectedProvider.Model, StringComparer.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(profile.Model) &&
+            !ModelOptions.Contains(profile.Model, StringComparer.OrdinalIgnoreCase))
         {
-            ModelOptions.Insert(0, SelectedProvider.Model);
+            if (AiModelCatalog.IsOpenAiCodexProvider(profile.ProviderType) && ModelOptions.Count > 0)
+            {
+                profile.Model = ModelOptions[0];
+                await SaveProviderPreferenceAsync(profile);
+            }
+            else
+            {
+                ModelOptions.Insert(0, profile.Model);
+            }
         }
 
-        if (string.IsNullOrWhiteSpace(SelectedProvider.Model) && ModelOptions.Count > 0)
+        if (string.IsNullOrWhiteSpace(profile.Model) && ModelOptions.Count > 0)
         {
-            SelectedProvider.Model = ModelOptions[0];
+            profile.Model = ModelOptions[0];
+            await SaveProviderPreferenceAsync(profile);
         }
 
         suppressSelectedModelUpdate = true;
-        SelectedModel = SelectedProvider.Model;
+        SelectedModel = profile.Model;
         suppressSelectedModelUpdate = false;
+        RefreshReasoningEffortOptions();
         UpdateContextTracker(null, 0);
-    }
-
-    private async Task<IReadOnlyList<AiModelMetadata>> LoadOpenRouterModelsAsync(bool forceRefresh)
-    {
-        var cacheKey = "ModelCatalog:OpenRouter";
-        var cached = forceRefresh ? null : await settingsService.GetSettingAsync(cacheKey, null);
-        if (!string.IsNullOrWhiteSpace(cached))
-        {
-            return AiModelCatalog.ParseOpenRouterModels(cached);
-        }
-
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, "https://openrouter.ai/api/v1/models");
-            var apiKey = await ResolveApiKeyAsync(SelectedProvider!);
-            if (!string.IsNullOrWhiteSpace(apiKey))
-            {
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-            }
-
-            using var response = await httpClient.SendAsync(request);
-            if (!response.IsSuccessStatusCode)
-            {
-                return AiModelCatalog.OpenRouterFallbackModels;
-            }
-
-            var body = await response.Content.ReadAsStringAsync();
-            await settingsService.SaveSettingAsync(cacheKey, body);
-            return AiModelCatalog.ParseOpenRouterModels(body)
-                .Where(model => model.Id.StartsWith("deepseek/", StringComparison.OrdinalIgnoreCase) ||
-                    model.Id.StartsWith("openai/", StringComparison.OrdinalIgnoreCase) ||
-                    model.Id.StartsWith("anthropic/", StringComparison.OrdinalIgnoreCase) ||
-                    model.Id.StartsWith("google/", StringComparison.OrdinalIgnoreCase) ||
-                    model.Id.StartsWith("qwen/", StringComparison.OrdinalIgnoreCase) ||
-                    model.Id.Equals("openrouter/auto", StringComparison.OrdinalIgnoreCase))
-                .Take(250)
-                .ToList();
-        }
-        catch
-        {
-            return AiModelCatalog.OpenRouterFallbackModels;
-        }
-    }
-
-    private async Task<IReadOnlyList<AiModelMetadata>> LoadOpenAiModelsAsync(bool forceRefresh)
-    {
-        var cacheKey = "ModelCatalog:OpenAI";
-        var cached = forceRefresh ? null : await settingsService.GetSettingAsync(cacheKey, null);
-        if (!string.IsNullOrWhiteSpace(cached))
-        {
-            var cachedModels = AiModelCatalog.ParseOpenAiModels(cached);
-            if (cachedModels.Count > 0)
-            {
-                return cachedModels;
-            }
-        }
-
-        var apiKey = await ResolveApiKeyAsync(SelectedProvider!);
-        if (string.IsNullOrWhiteSpace(apiKey))
-        {
-            return AiModelCatalog.OpenAiModels;
-        }
-
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, BuildModelsUrl(SelectedProvider!.BaseUrl));
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-            if (!string.IsNullOrWhiteSpace(SelectedProvider.OrganizationId))
-            {
-                request.Headers.TryAddWithoutValidation("OpenAI-Organization", SelectedProvider.OrganizationId);
-            }
-
-            if (!string.IsNullOrWhiteSpace(SelectedProvider.ProjectId))
-            {
-                request.Headers.TryAddWithoutValidation("OpenAI-Project", SelectedProvider.ProjectId);
-            }
-
-            using var response = await httpClient.SendAsync(request);
-            if (!response.IsSuccessStatusCode)
-            {
-                return AiModelCatalog.OpenAiModels;
-            }
-
-            var body = await response.Content.ReadAsStringAsync();
-            await settingsService.SaveSettingAsync(cacheKey, body);
-            var models = AiModelCatalog.ParseOpenAiModels(body);
-            return models.Count > 0 ? models : AiModelCatalog.OpenAiModels;
-        }
-        catch
-        {
-            return AiModelCatalog.OpenAiModels;
-        }
-    }
-
-    private async Task<IReadOnlyList<AiModelMetadata>> LoadOpenAiCompatibleModelsAsync(bool forceRefresh)
-    {
-        if (!forceRefresh && !string.IsNullOrWhiteSpace(SelectedProvider?.Model))
-        {
-            return [new AiModelMetadata(SelectedProvider.Model, SelectedProvider.Model)];
-        }
-
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Get, BuildModelsUrl(SelectedProvider!.BaseUrl));
-            var apiKey = await ResolveApiKeyAsync(SelectedProvider);
-            if (!string.IsNullOrWhiteSpace(apiKey))
-            {
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-            }
-
-            using var response = await httpClient.SendAsync(request);
-            if (!response.IsSuccessStatusCode)
-            {
-                return string.IsNullOrWhiteSpace(SelectedProvider.Model)
-                    ? []
-                    : [new AiModelMetadata(SelectedProvider.Model, SelectedProvider.Model)];
-            }
-
-            var body = await response.Content.ReadAsStringAsync();
-            var parsed = AiModelCatalog.ParseOpenAiModels(body, isLocalOrCustom: true);
-            return parsed.Count > 0
-                ? parsed
-                : string.IsNullOrWhiteSpace(SelectedProvider.Model)
-                    ? []
-                    : [new AiModelMetadata(SelectedProvider.Model, SelectedProvider.Model)];
-        }
-        catch
-        {
-            return string.IsNullOrWhiteSpace(SelectedProvider?.Model)
-                ? []
-                : [new AiModelMetadata(SelectedProvider.Model, SelectedProvider.Model)];
-        }
-    }
-
-    private async Task<string?> ResolveApiKeyAsync(AiProviderProfile profile)
-    {
-        var key = await secretStore.GetSecretAsync(profile.ApiKeyStorageKey);
-        if (!string.IsNullOrWhiteSpace(key))
-        {
-            return key;
-        }
-
-        var candidates = new List<string>();
-        if (AiModelCatalog.IsDeepSeekProvider(profile.ProviderType, profile.BaseUrl))
-        {
-            candidates.Add("ARGUS_DEEPSEEK_API_KEY");
-            candidates.Add("DEEPSEEK_API_KEY");
-        }
-        else if (AiModelCatalog.IsOpenAiProvider(profile.ProviderType, profile.BaseUrl))
-        {
-            candidates.Add("ARGUS_OPENAI_API_KEY");
-            candidates.Add("OPENAI_API_KEY");
-        }
-        else if (AiModelCatalog.IsOpenRouterProvider(profile.ProviderType, profile.BaseUrl))
-        {
-            candidates.Add("ARGUS_OPENROUTER_API_KEY");
-            candidates.Add("OPENROUTER_API_KEY");
-        }
-        else if (profile.ProviderType.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
-        {
-            candidates.Add("ARGUS_ANTHROPIC_API_KEY");
-            candidates.Add("ANTHROPIC_API_KEY");
-        }
-
-        candidates.Add($"ARGUS_{NormalizeEnvironmentName(profile.Name)}_API_KEY");
-        return candidates
-            .Select(Environment.GetEnvironmentVariable)
-            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
-    }
-
-    private static Uri BuildModelsUrl(string baseUrl)
-    {
-        var trimmed = baseUrl.Trim().TrimEnd('/');
-        if (trimmed.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
-        {
-            trimmed = trimmed[..^"/chat/completions".Length];
-        }
-
-        if (trimmed.EndsWith("/models", StringComparison.OrdinalIgnoreCase))
-        {
-            return new Uri(trimmed);
-        }
-
-        return new Uri($"{trimmed}/models");
     }
 
     private void UpdateContextTracker(AiChatResult? result, int estimatedPromptTokens)
     {
-        var contextLimit = GetSelectedContextWindowTokens();
+        var contextLimit = result?.ContextWindowTokens ?? GetSelectedContextWindowTokens();
         var usedTokens = result?.PromptTokens ?? estimatedPromptTokens;
         if (!contextLimit.HasValue || contextLimit <= 0)
         {
@@ -1852,6 +1942,8 @@ public partial class MainPageViewModel(
             ? "Waiting for model usage."
             : result.PromptTokens is null && estimatedPromptTokens > 0
             ? "LLM usage unavailable; showing local prompt estimate."
+            : result.ContextWindowTokens.HasValue && IsOpenAiCodexProvider
+            ? "Codex-reported prompt usage and session context window."
             : "LLM-reported prompt usage.";
     }
 
@@ -1868,11 +1960,6 @@ public partial class MainPageViewModel(
         }
 
         return AiModelCatalog.FindKnownModel(SelectedProvider.ProviderType, SelectedProvider.BaseUrl, SelectedProvider.Model)?.ContextWindowTokens;
-    }
-
-    private static string NormalizeEnvironmentName(string value)
-    {
-        return new string(value.Select(character => char.IsLetterOrDigit(character) ? char.ToUpperInvariant(character) : '_').ToArray());
     }
 
     private static void Replace<T>(ObservableCollection<T> collection, IEnumerable<T> values)
@@ -1914,7 +2001,11 @@ public partial class MainPageViewModel(
             new CommandPaletteItem("Search", "Search", "Run global node search.", SearchAsync),
             new CommandPaletteItem("Search Memories", "Memory", "Run local memory recall.", SearchMemoriesAsync),
             new CommandPaletteItem("New Conversation", "Chat", "Start a local conversation.", NewConversationAsync),
-            new CommandPaletteItem("Ask Argus", "Agent", "Run the v1 local agent summary.", AskAgentAsync)
+            new CommandPaletteItem("Ask Argus", "Agent", "Run the v1 local agent summary.", AskAgentAsync),
+            new CommandPaletteItem("Create Manual Backup", "Database", "Create a manual database backup.", CreateManualBackupAsync),
+            new CommandPaletteItem("Run Database Integrity Check", "Database", "Run PRAGMA quick_check.", RunIntegrityCheckAsync),
+            new CommandPaletteItem("Go to Tool Audits", "View", "Open tool execution audits.", () => { ShowAudits(); return Task.CompletedTask; }),
+            new CommandPaletteItem("Clear Tool Audits", "Database", "Clear all tool audits.", ClearAllAuditsAsync)
         });
     }
 
@@ -1955,58 +2046,141 @@ public partial class MainPageViewModel(
         get => SelectedProvider?.ThinkingMode == "enabled";
         set
         {
-            if (SelectedProvider is not null)
+            if (SelectedProvider is not null && CanToggleThinkingMode)
             {
                 SelectedProvider.ThinkingMode = value ? "enabled" : "disabled";
                 OnPropertyChanged(nameof(IsThinkingEnabled));
-                _ = Task.Run(async () =>
-                {
-                    await settingsService.SaveAiProviderProfileAsync(SelectedProvider);
-                });
+                OnPropertyChanged(nameof(ShowReasoningEffortPicker));
+                _ = SaveProviderPreferenceAsync(SelectedProvider);
             }
         }
     }
 
-    public bool ReasoningEffortMinimal
+    private void RefreshReasoningEffortOptions()
     {
-        get => SelectedProvider?.ReasoningEffort?.ToLowerInvariant() == "minimal";
-        set { if (value && SelectedProvider is not null) { SelectedProvider.ReasoningEffort = "minimal"; SaveSelectedProviderEffort("minimal"); } }
-    }
-    public bool ReasoningEffortLow
-    {
-        get => SelectedProvider?.ReasoningEffort?.ToLowerInvariant() == "low";
-        set { if (value && SelectedProvider is not null) { SelectedProvider.ReasoningEffort = "low"; SaveSelectedProviderEffort("low"); } }
-    }
-    public bool ReasoningEffortMedium
-    {
-        get => SelectedProvider?.ReasoningEffort?.ToLowerInvariant() == "medium";
-        set { if (value && SelectedProvider is not null) { SelectedProvider.ReasoningEffort = "medium"; SaveSelectedProviderEffort("medium"); } }
-    }
-    public bool ReasoningEffortHigh
-    {
-        get => SelectedProvider?.ReasoningEffort?.ToLowerInvariant() == "high";
-        set { if (value && SelectedProvider is not null) { SelectedProvider.ReasoningEffort = "high"; SaveSelectedProviderEffort("high"); } }
-    }
-    public bool ReasoningEffortMax
-    {
-        get => SelectedProvider?.ReasoningEffort?.ToLowerInvariant() == "max" || SelectedProvider?.ReasoningEffort?.ToLowerInvariant() == "xhigh";
-        set { if (value && SelectedProvider is not null) { SelectedProvider.ReasoningEffort = "max"; SaveSelectedProviderEffort("max"); } }
+        var profile = SelectedProvider;
+        if (profile is null)
+        {
+            ReasoningEffortOptions.Clear();
+            OnPropertyChanged(nameof(HasReasoningEffortOptions));
+            OnPropertyChanged(nameof(HasReasoningControls));
+            OnPropertyChanged(nameof(ShowReasoningEffortPicker));
+            OnPropertyChanged(nameof(ReasoningCapabilityHelpText));
+            OnPropertyChanged(nameof(SelectedReasoningEffort));
+            return;
+        }
+
+        var metadata = !string.IsNullOrWhiteSpace(profile.Model) &&
+            modelMetadata.TryGetValue(profile.Model, out var loadedMetadata)
+            ? loadedMetadata
+            : AiModelCatalog.FindKnownModel(profile.ProviderType, profile.BaseUrl, profile.Model);
+        var efforts = metadata?.ReasoningEfforts?.Where(value => !string.IsNullOrWhiteSpace(value)).ToList() ?? [];
+        Replace(ReasoningEffortOptions, efforts.Distinct(StringComparer.OrdinalIgnoreCase));
+        var previousEffort = profile.ReasoningEffort;
+        var previousThinkingMode = profile.ThinkingMode;
+        var current = profile.ReasoningEffort;
+        var normalized = ReasoningEffortOptions.FirstOrDefault(
+            value => value.Equals(current, StringComparison.OrdinalIgnoreCase));
+        normalized ??= current.Equals("max", StringComparison.OrdinalIgnoreCase)
+            ? ReasoningEffortOptions.FirstOrDefault(value => value.Equals("xhigh", StringComparison.OrdinalIgnoreCase))
+            : current.Equals("xhigh", StringComparison.OrdinalIgnoreCase)
+                ? ReasoningEffortOptions.FirstOrDefault(value => value.Equals("max", StringComparison.OrdinalIgnoreCase))
+                : null;
+        normalized ??= ReasoningEffortOptions.FirstOrDefault(
+            value => value.Equals("medium", StringComparison.OrdinalIgnoreCase));
+        normalized ??= ReasoningEffortOptions.FirstOrDefault();
+
+        suppressReasoningEffortUpdate = true;
+        if (!string.IsNullOrWhiteSpace(normalized))
+        {
+            profile.ReasoningEffort = normalized;
+        }
+
+        if (!CanToggleThinkingMode && ReasoningEffortOptions.Count > 0)
+        {
+            profile.ThinkingMode = profile.ReasoningEffort.Equals("none", StringComparison.OrdinalIgnoreCase)
+                ? "disabled"
+                : "enabled";
+        }
+
+        suppressReasoningEffortUpdate = false;
+        OnPropertyChanged(nameof(HasReasoningEffortOptions));
+        OnPropertyChanged(nameof(HasReasoningControls));
+        OnPropertyChanged(nameof(ShowReasoningEffortPicker));
+        OnPropertyChanged(nameof(ReasoningCapabilityHelpText));
+        OnPropertyChanged(nameof(IsThinkingEnabled));
+        OnPropertyChanged(nameof(SelectedReasoningEffort));
+        if (!string.Equals(previousEffort, profile.ReasoningEffort, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(previousThinkingMode, profile.ThinkingMode, StringComparison.OrdinalIgnoreCase))
+        {
+            _ = SaveProviderPreferenceAsync(profile);
+        }
     }
 
-    private void SaveSelectedProviderEffort(string effort)
+    private async Task SaveProviderPreferenceAsync(AiProviderProfile profile)
     {
-        OnPropertyChanged(nameof(ReasoningEffortMinimal));
-        OnPropertyChanged(nameof(ReasoningEffortLow));
-        OnPropertyChanged(nameof(ReasoningEffortMedium));
-        OnPropertyChanged(nameof(ReasoningEffortHigh));
-        OnPropertyChanged(nameof(ReasoningEffortMax));
-        _ = Task.Run(async () =>
+        var snapshot = CloneProviderProfile(profile);
+        try
         {
-            if (SelectedProvider is not null)
+            await providerPreferenceSaveLock.WaitAsync();
+            try
             {
-                await settingsService.SaveAiProviderProfileAsync(SelectedProvider);
+                await settingsService.SaveAiProviderProfileAsync(snapshot);
             }
-        });
+            finally
+            {
+                providerPreferenceSaveLock.Release();
+            }
+        }
+        catch (Exception ex)
+        {
+            SettingsStatus = $"Could not save {profile.Name} settings: {ex.Message}";
+        }
+    }
+
+    private static AiProviderProfile CloneProviderProfile(AiProviderProfile profile)
+    {
+        return new AiProviderProfile
+        {
+            Id = profile.Id,
+            Name = profile.Name,
+            ProviderType = profile.ProviderType,
+            BaseUrl = profile.BaseUrl,
+            Model = profile.Model,
+            ApiKeyStorageKey = profile.ApiKeyStorageKey,
+            ThinkingMode = profile.ThinkingMode,
+            ReasoningEffort = profile.ReasoningEffort,
+            OrganizationId = profile.OrganizationId,
+            ProjectId = profile.ProjectId,
+            IsDefault = profile.IsDefault
+        };
+    }
+
+    private async Task PersistDefaultProviderAsync(AiProviderProfile profile)
+    {
+        await SaveProviderPreferenceAsync(profile);
+        var profiles = await settingsService.GetAiProviderProfilesAsync();
+
+        void ApplyDefaultFlags()
+        {
+            foreach (var localProfile in ProviderProfiles)
+            {
+                var persisted = profiles.FirstOrDefault(candidate => candidate.Id == localProfile.Id);
+                if (persisted is not null)
+                {
+                    localProfile.IsDefault = persisted.IsDefault;
+                }
+            }
+        }
+
+        if (App.DispatcherQueue is not null)
+        {
+            App.DispatcherQueue.TryEnqueue(ApplyDefaultFlags);
+        }
+        else
+        {
+            ApplyDefaultFlags();
+        }
     }
 
     partial void OnTelegramGatewayStatusTextChanged(string value)
@@ -2017,36 +2191,37 @@ public partial class MainPageViewModel(
 
     partial void OnSelectedProviderChanged(AiProviderProfile? value)
     {
+        ReasoningEffortOptions.Clear();
+        OnPropertyChanged(nameof(HasReasoningEffortOptions));
+        OnPropertyChanged(nameof(HasReasoningControls));
+        OnPropertyChanged(nameof(ShowReasoningEffortPicker));
         OnPropertyChanged(nameof(IsThinkingEnabled));
-        OnPropertyChanged(nameof(ReasoningEffortMinimal));
-        OnPropertyChanged(nameof(ReasoningEffortLow));
-        OnPropertyChanged(nameof(ReasoningEffortMedium));
-        OnPropertyChanged(nameof(ReasoningEffortHigh));
-        OnPropertyChanged(nameof(ReasoningEffortMax));
+        OnPropertyChanged(nameof(SelectedReasoningEffort));
+        OnPropertyChanged(nameof(IsOpenAiCodexProvider));
+        OnPropertyChanged(nameof(IsAnthropicProvider));
         OnPropertyChanged(nameof(IsApiKeyRequired));
-        _ = LoadModelOptionsForSelectedProviderAsync(forceRefresh: false);
-        _ = UpdateApiKeyPlaceholderAsync(value);
+        OnPropertyChanged(nameof(ProviderAuthenticationHelpText));
+        OnPropertyChanged(nameof(CanToggleThinkingMode));
+        OnPropertyChanged(nameof(ReasoningCapabilityHelpText));
+
+        if (suppressSelectedProviderSideEffects)
+        {
+            return;
+        }
 
         if (value is not null && !value.IsDefault)
         {
-            value.IsDefault = true;
-            _ = Task.Run(async () =>
+            foreach (var profile in ProviderProfiles)
             {
-                await settingsService.SaveAiProviderProfileAsync(value);
-                var profiles = await settingsService.GetAiProviderProfilesAsync();
-                App.DispatcherQueue.TryEnqueue(() =>
-                {
-                    foreach (var p in ProviderProfiles)
-                    {
-                        var dbProfile = profiles.FirstOrDefault(dp => dp.Id == p.Id);
-                        if (dbProfile is not null)
-                        {
-                            p.IsDefault = dbProfile.IsDefault;
-                        }
-                    }
-                });
-            });
+                profile.IsDefault = profile.Id == value.Id;
+            }
+
+            _ = PersistDefaultProviderAsync(value);
         }
+
+        _ = LoadModelOptionsForSelectedProviderAsync(forceRefresh: false);
+        _ = UpdateApiKeyPlaceholderAsync(value);
+        _ = UpdateProviderAuthenticationStatusAsync(value);
     }
 
     partial void OnSelectedModelChanged(string value)
@@ -2059,9 +2234,11 @@ public partial class MainPageViewModel(
         if (!string.Equals(SelectedProvider.Model, value, StringComparison.OrdinalIgnoreCase))
         {
             SelectedProvider.Model = value;
+            RefreshReasoningEffortOptions();
             UpdateContextTracker(null, 0);
-            _ = Task.Run(async () => await settingsService.SaveAiProviderProfileAsync(SelectedProvider));
+            _ = SaveProviderPreferenceAsync(SelectedProvider);
             OnPropertyChanged(nameof(SelectedProvider));
+            OnPropertyChanged(nameof(ReasoningCapabilityHelpText));
         }
     }
 
@@ -2075,7 +2252,8 @@ public partial class MainPageViewModel(
 
     private async Task UpdateApiKeyPlaceholderAsync(AiProviderProfile? profile)
     {
-        if (profile is null)
+        if (profile is null ||
+            aiProviderRegistry.GetCapabilities(profile).AuthenticationMode != AiAuthenticationMode.ApiKey)
         {
             if (App.DispatcherQueue is not null)
             {
@@ -2102,15 +2280,10 @@ public partial class MainPageViewModel(
         }
         else
         {
-            var resolvedKey = await ResolveApiKeyAsync(profile);
-            if (!string.IsNullOrWhiteSpace(resolvedKey))
-            {
-                placeholder = "Configured via Env Var";
-            }
-            else
-            {
-                placeholder = "Enter API key";
-            }
+            var status = await aiProviderRegistry.GetConnectionStatusAsync(profile);
+            placeholder = status.UsesEnvironmentCredential
+                ? "Configured via Env Var"
+                : "Enter API key";
         }
 
         if (App.DispatcherQueue is not null)
@@ -2120,6 +2293,20 @@ public partial class MainPageViewModel(
         else
         {
             ApiKeyPlaceholder = placeholder;
+        }
+    }
+
+    private async Task UpdateProviderAuthenticationStatusAsync(AiProviderProfile? profile)
+    {
+        if (profile is null)
+        {
+            return;
+        }
+
+        var status = await aiProviderRegistry.GetConnectionStatusAsync(profile);
+        if (SelectedProvider?.Id == profile.Id)
+        {
+            SettingsStatus = status.Message;
         }
     }
 
@@ -2243,6 +2430,232 @@ public partial class MainPageViewModel(
         var text = BuildVersionDisplayText().TrimStart('v');
         return Version.TryParse(text, out var version) ? version : new Version(0, 0, 0);
     }
+
+    // New properties and commands for Tool Audits and Database Maintenance
+    public ObservableCollection<ToolExecutionAudit> AuditRecords { get; } = new();
+    public ObservableCollection<string> AuditRiskFilterOptions { get; } = new() { "All", "ReadOnly", "Mutating", "Destructive" };
+    public ObservableCollection<string> AuditApprovalFilterOptions { get; } = new() { "All", "approved", "auto_approved", "denied", "unknown" };
+    public ObservableCollection<string> AuditOutcomeFilterOptions { get; } = new() { "All", "succeeded", "failed", "cancelled", "started" };
+
+    [ObservableProperty]
+    public partial string AuditFilterToolName { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string AuditFilterRiskLevel { get; set; } = "All";
+
+    [ObservableProperty]
+    public partial string AuditFilterApprovalStatus { get; set; } = "All";
+
+    [ObservableProperty]
+    public partial string AuditFilterOutcome { get; set; } = "All";
+
+    [ObservableProperty]
+    public partial bool AuditFilterOnlyIncomplete { get; set; }
+
+    [ObservableProperty]
+    public partial ToolExecutionAudit? SelectedAuditRecord { get; set; }
+
+    [ObservableProperty]
+    public partial string DatabasePathDisplay { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string DatabaseSizeDisplay { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string DatabaseIntegrityDisplay { get; set; } = "Unknown";
+
+    [ObservableProperty]
+    public partial string CustomBackupName { get; set; } = string.Empty;
+
+    public ObservableCollection<BackupFileInfo> BackupsCollection { get; } = new();
+
+    [RelayCommand]
+    private void ShowAudits()
+    {
+        CurrentView = "Audits";
+        _ = LoadAuditsAsync();
+    }
+
+    public async Task LoadAuditsAsync()
+    {
+        try
+        {
+            var audits = await auditService.GetFilteredAsync(
+                toolName: AuditFilterToolName,
+                riskLevel: AuditFilterRiskLevel,
+                approvalStatus: AuditFilterApprovalStatus,
+                outcome: AuditFilterOutcome,
+                onlyIncomplete: AuditFilterOnlyIncomplete);
+
+            AuditRecords.Clear();
+            foreach (var audit in audits)
+            {
+                AuditRecords.Add(audit);
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Failed to load audits: {ex.Message}";
+        }
+    }
+
+    partial void OnAuditFilterToolNameChanged(string value) => _ = LoadAuditsAsync();
+    partial void OnAuditFilterRiskLevelChanged(string value) => _ = LoadAuditsAsync();
+    partial void OnAuditFilterApprovalStatusChanged(string value) => _ = LoadAuditsAsync();
+    partial void OnAuditFilterOutcomeChanged(string value) => _ = LoadAuditsAsync();
+    partial void OnAuditFilterOnlyIncompleteChanged(bool value) => _ = LoadAuditsAsync();
+
+    public async Task RefreshDatabaseInfoAsync()
+    {
+        DatabasePathDisplay = databaseBackupService.DatabasePath;
+        var sizeBytes = databaseBackupService.GetDatabaseSizeInBytes();
+        DatabaseSizeDisplay = FormatSize(sizeBytes);
+        await RefreshBackupsAsync();
+    }
+
+    private static string FormatSize(long bytes)
+    {
+        string[] suffixes = { "B", "KB", "MB", "GB" };
+        int counter = 0;
+        decimal number = bytes;
+        while (Math.Round(number / 1024) >= 1)
+        {
+            number /= 1024;
+            counter++;
+        }
+        return string.Format("{0:n1} {1}", number, suffixes[counter]);
+    }
+
+    public async Task RefreshBackupsAsync()
+    {
+        try
+        {
+            var backups = databaseBackupService.GetBackups();
+            BackupsCollection.Clear();
+            foreach (var b in backups)
+            {
+                BackupsCollection.Add(b);
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Failed to read backups: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task RunIntegrityCheckAsync()
+    {
+        DatabaseIntegrityDisplay = "Running check...";
+        var result = await databaseBackupService.RunIntegrityCheckAsync();
+        DatabaseIntegrityDisplay = result;
+    }
+
+    [RelayCommand]
+    private async Task CreateManualBackupAsync()
+    {
+        try
+        {
+            var result = await databaseBackupService.CreateManualBackupAsync(
+                string.IsNullOrWhiteSpace(CustomBackupName) ? "manual" : CustomBackupName);
+            StatusText = result.Message;
+            CustomBackupName = string.Empty;
+            await RefreshDatabaseInfoAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Backup failed: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task RestoreBackupAsync(BackupFileInfo? backup)
+    {
+        if (backup is null) return;
+        try
+        {
+            var result = await databaseBackupService.RestoreBackupAsync(backup.FilePath);
+            StatusText = result.Message;
+            await RefreshDatabaseInfoAsync();
+            await LoadConversationsAsync();
+            await LoadGraphAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Restore failed: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task DeleteBackupAsync(BackupFileInfo? backup)
+    {
+        if (backup is null) return;
+        try
+        {
+            databaseBackupService.DeleteBackup(backup.FilePath);
+            StatusText = $"Deleted backup {backup.FileName}.";
+            await RefreshBackupsAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Delete failed: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task PruneAuditsAsync()
+    {
+        try
+        {
+            var limit = DateTimeOffset.UtcNow.AddDays(-30);
+            var prunedCount = await auditService.PruneOldAuditsAsync(limit);
+            StatusText = $"Pruned {prunedCount} audit records older than 30 days.";
+            await LoadAuditsAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Pruning failed: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task ClearAllAuditsAsync()
+    {
+        try
+        {
+            var clearedCount = await auditService.ClearAllAuditsAsync();
+            StatusText = $"Cleared {clearedCount} audit records.";
+            await LoadAuditsAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Clearing failed: {ex.Message}";
+        }
+    }
 }
 
 public sealed record CommandPaletteItem(string Title, string Category, string Description, Func<Task> ExecuteAsync);
+
+public partial class MemoryRecallDisplayItem(MemoryRecallResult recall) : ObservableObject
+{
+    public MemoryRecallResult Recall { get; } = recall;
+
+    [ObservableProperty]
+    public partial string FeedbackText { get; set; } = string.Empty;
+
+    public string Text => Recall.Memory.Text;
+    public string ScoreText => $"{Recall.Score:P0}";
+    public string MethodText => Recall.Method switch
+    {
+        MemoryRecallMethod.ExactPhrase => "EXACT PHRASE",
+        MemoryRecallMethod.Keyword => "KEYWORD",
+        MemoryRecallMethod.Semantic => "SEMANTIC",
+        MemoryRecallMethod.Hybrid => "HYBRID",
+        _ => "RECENT"
+    };
+    public string MetadataText =>
+        $"Source: {Recall.Memory.Source}  |  Importance: {Recall.Memory.Importance}/5  |  Created: {Recall.Memory.CreatedAt.LocalDateTime:g}";
+    public string Explanation => Recall.Explanation;
+    public string ComponentScoresText =>
+        $"Semantic {Recall.SemanticScore:P0}  |  Lexical {Recall.LexicalScore:P0}  |  Importance {Recall.ImportanceScore:P0}  |  Recency {Recall.RecencyScore:P0}";
+}

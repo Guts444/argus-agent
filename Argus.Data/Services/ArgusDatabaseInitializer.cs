@@ -7,14 +7,25 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
 {
     private const string DeepSeekDefaultsMigrationKey = "Migration:DeepSeekDefaults:v2";
     private const string PublicSeedContentMigrationKey = "Migration:PublicSeedContent:v1";
+    private const string OpenAiCodexProviderMigrationKey = "Migration:OpenAiCodexProvider:v1";
+    private const string ChatArtifactCleanupMigrationKey = "Migration:ChatArtifactCleanup:v1";
+    private const string ProviderDefaultRepairMigrationKey = "Migration:ProviderDefaultRepair:v1";
 
-    public async Task InitializeAsync(CancellationToken cancellationToken = default)
+    public async Task InitializeAsync(
+        CancellationToken cancellationToken = default,
+        IProgress<DatabaseInitializationProgress>? progress = null)
     {
+        progress?.Report(new DatabaseInitializationProgress(
+            "Checking local database",
+            "Inspecting the SQLite schema and migration history."));
         await using var db = await dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         bool canConnect = await db.Database.CanConnectAsync(cancellationToken);
         if (!canConnect)
         {
+            progress?.Report(new DatabaseInitializationProgress(
+                "Creating local database",
+                "Applying the initial Argus schema."));
             await db.Database.MigrateAsync(cancellationToken);
         }
         else
@@ -43,6 +54,9 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
 
             if (tableCount == 0)
             {
+                progress?.Report(new DatabaseInitializationProgress(
+                    "Creating local database",
+                    "Applying the initial Argus schema."));
                 await db.Database.MigrateAsync(cancellationToken);
             }
             else
@@ -68,6 +82,9 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
 
                 if (!hasHistory)
                 {
+                    progress?.Report(new DatabaseInitializationProgress(
+                        "Adopting existing database",
+                        "Recording migration history for an older Argus database."));
                     await db.Database.ExecuteSqlRawAsync(
                         @"CREATE TABLE ""__EFMigrationsHistory"" (
                             ""MigrationId"" TEXT NOT NULL CONSTRAINT ""PK___EFMigrationsHistory"" PRIMARY KEY,
@@ -78,12 +95,21 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
                           VALUES ('20260604194301_InitialCreate', '10.0.8');", cancellationToken);
                 }
 
+                progress?.Report(new DatabaseInitializationProgress(
+                    "Applying database upgrades",
+                    "Updating the local schema without sending data anywhere."));
                 await db.Database.MigrateAsync(cancellationToken);
             }
         }
 
+        progress?.Report(new DatabaseInitializationProgress(
+            "Checking local search",
+            "Refreshing SQLite full-text search indexes."));
         await EnsureSearchIndexAsync(db, cancellationToken);
 
+        progress?.Report(new DatabaseInitializationProgress(
+            "Updating provider settings",
+            "Preserving model choices while applying provider compatibility fixes."));
         if (!await db.AiProviderProfiles.AnyAsync(cancellationToken))
         {
             db.AiProviderProfiles.AddRange(CreateProviderProfiles());
@@ -93,6 +119,12 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
             await UpgradeProviderProfilesAsync(db, cancellationToken);
         }
 
+        await RemoveLegacyOAuthProfilesAsync(db, cancellationToken);
+        await CleanupAutomaticChatArtifactsAsync(db, cancellationToken);
+
+        progress?.Report(new DatabaseInitializationProgress(
+            "Loading workspace structure",
+            "Checking graph seed content and local application settings."));
         if (!await db.Nodes.AnyAsync(cancellationToken))
         {
             SeedGraph(db);
@@ -124,9 +156,14 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
                 ? "deepseek-v4-pro"
                 : deepSeek.Model;
             deepSeek.ApiKeyStorageKey = "ai.deepseek.api_key";
-            deepSeek.ThinkingMode = !deepSeekDefaultsMigrated || string.IsNullOrWhiteSpace(deepSeek.ThinkingMode) ? "enabled" : deepSeek.ThinkingMode;
-            deepSeek.ReasoningEffort = string.IsNullOrWhiteSpace(deepSeek.ReasoningEffort) ? "high" : deepSeek.ReasoningEffort;
-            deepSeek.IsDefault = true;
+            deepSeek.ThinkingMode = string.IsNullOrWhiteSpace(deepSeek.ThinkingMode)
+                ? "enabled"
+                : deepSeek.ThinkingMode;
+            deepSeek.ReasoningEffort = (deepSeek.ReasoningEffort ?? string.Empty).Trim().ToLowerInvariant() switch
+            {
+                "max" or "xhigh" => "max",
+                _ => "high"
+            };
         }
 
         if (!await db.AiProviderProfiles.AnyAsync(profile => profile.Name == "OpenAI", cancellationToken))
@@ -141,6 +178,43 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
                 ThinkingMode = "enabled",
                 ReasoningEffort = "medium"
             });
+        }
+
+        if (!await db.AppSettings.AnyAsync(setting => setting.Key == OpenAiCodexProviderMigrationKey, cancellationToken))
+        {
+            if (!await db.AiProviderProfiles.AnyAsync(profile => profile.ProviderType == "OpenAICodex", cancellationToken))
+            {
+                db.AiProviderProfiles.Add(new AiProviderProfile
+                {
+                    Name = "OpenAI Codex (ChatGPT)",
+                    ProviderType = "OpenAICodex",
+                    BaseUrl = "codex://app-server",
+                    Model = "gpt-5.5",
+                    ApiKeyStorageKey = string.Empty,
+                    ThinkingMode = "enabled",
+                    ReasoningEffort = "medium"
+                });
+            }
+
+            db.AppSettings.Add(new AppSetting
+            {
+                Key = OpenAiCodexProviderMigrationKey,
+                Value = "applied",
+                UpdatedAt = DateTimeOffset.UtcNow
+            });
+        }
+
+        var codex = await db.AiProviderProfiles.FirstOrDefaultAsync(
+            profile => profile.ProviderType == "OpenAICodex",
+            cancellationToken);
+        if (codex is not null)
+        {
+            codex.ThinkingMode = "enabled";
+            if (string.IsNullOrWhiteSpace(codex.ReasoningEffort) ||
+                codex.ReasoningEffort.Equals("none", StringComparison.OrdinalIgnoreCase))
+            {
+                codex.ReasoningEffort = "medium";
+            }
         }
 
         var openRouter = await db.AiProviderProfiles.FirstOrDefaultAsync(profile => profile.Name == "OpenRouter", cancellationToken);
@@ -175,10 +249,18 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
                 Name = "Anthropic",
                 ProviderType = "Anthropic",
                 BaseUrl = "https://api.anthropic.com/v1",
-                Model = "claude-3-5-sonnet-latest",
+                Model = "claude-sonnet-4-6",
                 ApiKeyStorageKey = "ai.anthropic.api_key",
                 ThinkingMode = "disabled"
             });
+        }
+        else
+        {
+            var anthropic = await db.AiProviderProfiles.FirstAsync(profile => profile.Name == "Anthropic", cancellationToken);
+            if (anthropic.Model is "claude-3-5-sonnet-latest" or "claude-3-5-haiku-latest" or "claude-3-opus-latest")
+            {
+                anthropic.Model = "claude-sonnet-4-6";
+            }
         }
 
         if (!deepSeekDefaultsMigrated)
@@ -190,6 +272,99 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
                 UpdatedAt = DateTimeOffset.UtcNow
             });
         }
+
+        var defaultProfiles = await db.AiProviderProfiles
+            .Where(profile => profile.IsDefault)
+            .ToListAsync(cancellationToken);
+        var providerDefaultRepairApplied = await db.AppSettings.AnyAsync(
+            setting => setting.Key == ProviderDefaultRepairMigrationKey,
+            cancellationToken);
+        if (!providerDefaultRepairApplied)
+        {
+            if (defaultProfiles.Count > 1)
+            {
+                var preferred = defaultProfiles.FirstOrDefault(
+                    profile => !profile.ProviderType.Equals("DeepSeek", StringComparison.OrdinalIgnoreCase))
+                    ?? defaultProfiles[0];
+                foreach (var profile in defaultProfiles)
+                {
+                    profile.IsDefault = profile.Id == preferred.Id;
+                }
+            }
+            else if (defaultProfiles.Count == 0)
+            {
+                var fallback = deepSeek ?? await db.AiProviderProfiles.FirstOrDefaultAsync(cancellationToken);
+                if (fallback is not null)
+                {
+                    fallback.IsDefault = true;
+                }
+            }
+
+            db.AppSettings.Add(new AppSetting
+            {
+                Key = ProviderDefaultRepairMigrationKey,
+                Value = "applied",
+                UpdatedAt = DateTimeOffset.UtcNow
+            });
+        }
+    }
+
+    private static async Task RemoveLegacyOAuthProfilesAsync(
+        ArgusDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var legacyProfiles = await db.AiProviderProfiles
+            .Where(profile =>
+                profile.Name == "OpenAI (OAuth)" ||
+                profile.Name == "Anthropic (OAuth)" ||
+                profile.ProviderType == "OpenAI-OAuth" ||
+                profile.ProviderType == "OpenAIOAuth" ||
+                profile.ProviderType == "Anthropic-OAuth" ||
+                profile.ProviderType == "AnthropicOAuth")
+            .ToListAsync(cancellationToken);
+
+        if (legacyProfiles.Count > 0)
+        {
+            db.AiProviderProfiles.RemoveRange(legacyProfiles);
+        }
+    }
+
+    private static async Task CleanupAutomaticChatArtifactsAsync(
+        ArgusDbContext db,
+        CancellationToken cancellationToken)
+    {
+        if (await db.AppSettings.AnyAsync(
+                setting => setting.Key == ChatArtifactCleanupMigrationKey,
+                cancellationToken))
+        {
+            return;
+        }
+
+        var automaticChatMemories = await db.Memories
+            .Where(memory => memory.Source == "chat:user" || memory.Source == "chat:assistant")
+            .ToListAsync(cancellationToken);
+        db.Memories.RemoveRange(automaticChatMemories);
+
+        var automaticChatNodes = await db.Nodes
+            .Where(node =>
+                node.Type == "Memory" &&
+                node.Status == "Captured" &&
+                node.IconKey == "memory")
+            .ToListAsync(cancellationToken);
+        db.Nodes.RemoveRange(automaticChatNodes);
+
+        const string fakeSubscriptionMarker = "This is a subscription model response from";
+        var fakeSubscriptionMessages = await db.Messages
+            .Where(message => message.Content.Contains(fakeSubscriptionMarker))
+            .ToListAsync(cancellationToken);
+        db.Messages.RemoveRange(fakeSubscriptionMessages);
+
+        db.AppSettings.Add(new AppSetting
+        {
+            Key = ChatArtifactCleanupMigrationKey,
+            Value = "applied",
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
     }
 
     private static async Task UpgradePublicSeedContentAsync(ArgusDbContext db, CancellationToken cancellationToken)
@@ -373,6 +548,16 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
             },
             new AiProviderProfile
             {
+                Name = "OpenAI Codex (ChatGPT)",
+                ProviderType = "OpenAICodex",
+                BaseUrl = "codex://app-server",
+                Model = "gpt-5.5",
+                ApiKeyStorageKey = string.Empty,
+                ThinkingMode = "enabled",
+                ReasoningEffort = "medium"
+            },
+            new AiProviderProfile
+            {
                 Name = "OpenRouter",
                 ProviderType = "OpenRouter",
                 BaseUrl = "https://openrouter.ai/api/v1",
@@ -384,7 +569,7 @@ public sealed class ArgusDatabaseInitializer(IDbContextFactory<ArgusDbContext> d
                 Name = "Anthropic",
                 ProviderType = "Anthropic",
                 BaseUrl = "https://api.anthropic.com/v1",
-                Model = "claude-3-5-sonnet-latest",
+                Model = "claude-sonnet-4-6",
                 ApiKeyStorageKey = "ai.anthropic.api_key",
                 ThinkingMode = "disabled"
             },

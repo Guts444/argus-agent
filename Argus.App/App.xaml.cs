@@ -55,10 +55,6 @@ public partial class App : Application
     /// <param name="args">Details about the launch request and process.</param>
     protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
-        Services.GetRequiredService<ArgusDatabaseInitializer>().InitializeAsync().GetAwaiter().GetResult();
-
-        _ = Services.GetRequiredService<ITelegramGatewayService>().StartAsync();
-
         Window = new MainWindow();
         DispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
         Window.Activate();
@@ -67,11 +63,25 @@ public partial class App : Application
     private static IServiceProvider ConfigureServices()
     {
         var services = new ServiceCollection();
+#if DEBUG
+        services.AddArgusData(ArgusDataPaths.GetDevelopmentDatabasePath());
+#else
         services.AddArgusData(ArgusDataPaths.GetDefaultDatabasePath());
+#endif
         services.AddSingleton<ISecretStore, WindowsSecretStore>();
         services.AddSingleton(new HttpClient());
-        services.AddSingleton<IAiChatService, OpenAiCompatibleChatService>();
+        services.AddSingleton<IOpenAiCodexService, CodexAppServerService>();
+        services.AddSingleton<OpenAiCompatibleChatService>();
+        services.AddSingleton<IAiProviderAdapter>(provider =>
+            provider.GetRequiredService<OpenAiCompatibleChatService>());
+        services.AddSingleton<IAiProviderAdapter, CodexProviderAdapter>();
+        services.AddSingleton<AiProviderRouter>();
+        services.AddSingleton<IAiChatService>(provider =>
+            provider.GetRequiredService<AiProviderRouter>());
+        services.AddSingleton<IAiProviderRegistry>(provider =>
+            provider.GetRequiredService<AiProviderRouter>());
         services.AddSingleton<IToolService, ToolService>();
+        services.AddSingleton<IToolApprovalService, ToolApprovalService>();
         services.AddSingleton<IAgentService, AgentService>();
         services.AddSingleton<ITelegramGatewayService, TelegramGatewayService>();
         services.AddSingleton<ISoulService, SoulService>();

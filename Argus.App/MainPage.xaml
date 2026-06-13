@@ -79,6 +79,9 @@
                     <Button Style="{StaticResource SidebarButtonStyle}" Command="{Binding ShowSkillsCommand}" ToolTipService.ToolTip="Skills">
                         <FontIcon Glyph="&#xE950;" FontSize="17" />
                     </Button>
+                    <Button Style="{StaticResource SidebarButtonStyle}" Command="{Binding ShowAuditsCommand}" ToolTipService.ToolTip="Tool Audits">
+                        <FontIcon Glyph="&#xE9F9;" FontSize="17" />
+                    </Button>
                     <Button Style="{StaticResource SidebarButtonStyle}" Command="{Binding ShowSettingsCommand}" ToolTipService.ToolTip="Settings">
                         <FontIcon Glyph="&#xE713;" FontSize="17" />
                     </Button>
@@ -542,26 +545,71 @@
                     <Grid RowSpacing="12">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
                         </Grid.RowDefinitions>
-                        <Grid ColumnSpacing="10">
+                        <Grid ColumnSpacing="12">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <TextBox PlaceholderText="Search local memories" Text="{Binding MemorySearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                            <Button Grid.Column="1" Command="{Binding SearchMemoriesCommand}">
-                                <FontIcon Glyph="&#xE721;" />
-                            </Button>
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="MEMORY DEBUGGER" Style="{StaticResource PanelTitleStyle}" FontSize="18" />
+                                <TextBlock Text="{Binding MemoryDebuggerStatusText}" Style="{StaticResource MetaTextStyle}" TextWrapping="WrapWholeWords" />
+                            </StackPanel>
+                            <ProgressRing Grid.Column="1" Width="20" Height="20" IsActive="{Binding IsMemoryDebuggerBusy}"
+                                          Visibility="{Binding IsMemoryDebuggerBusy, Converter={StaticResource BoolToVisibilityConverter}}" />
                         </Grid>
-                        <ListView Grid.Row="1" ItemsSource="{Binding Memories}" SelectionMode="None">
+                        <Grid Grid.Row="1" ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox PlaceholderText="Ask a test question, e.g. What did we decide about local-first storage?"
+                                     Text="{Binding MemorySearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            <Button Grid.Column="1" Command="{Binding SearchMemoriesCommand}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <FontIcon Glyph="&#xE9D9;" FontSize="14" />
+                                    <TextBlock Text="Evaluate Recall" />
+                                </StackPanel>
+                            </Button>
+                            <Button Grid.Column="2" Content="Recent" Command="{Binding ShowRecentMemoriesCommand}" />
+                        </Grid>
+                        <ListView Grid.Row="2" ItemsSource="{Binding MemoryRecallResults}" SelectionMode="None">
                             <ListView.ItemTemplate>
                                 <DataTemplate>
-                                    <Border Padding="10" Margin="0,0,0,8" CornerRadius="8" BorderBrush="{StaticResource ArgusMutedBorderBrush}" BorderThickness="1">
-                                        <StackPanel Spacing="5">
-                                            <TextBlock Text="{Binding Text}" TextWrapping="WrapWholeWords" Foreground="{StaticResource ArgusTextBrush}" />
-                                            <TextBlock Text="{Binding Source}" Style="{StaticResource MetaTextStyle}" />
-                                        </StackPanel>
+                                    <Border Padding="12" Margin="0,0,0,8" CornerRadius="8" BorderBrush="{StaticResource ArgusMutedBorderBrush}" BorderThickness="1">
+                                        <Grid ColumnSpacing="12">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="70" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Border Padding="8" CornerRadius="6" Background="#2210F7FF" BorderBrush="{StaticResource ArgusAccentBrush}" BorderThickness="1"
+                                                    VerticalAlignment="Top">
+                                                <StackPanel Spacing="3">
+                                                    <TextBlock Text="{Binding ScoreText}" Foreground="{StaticResource ArgusAccentBrush}" FontSize="18"
+                                                               FontWeight="SemiBold" FontFamily="Cascadia Code" HorizontalAlignment="Center" />
+                                                    <TextBlock Text="{Binding MethodText}" Foreground="{StaticResource ArgusMutedTextBrush}" FontSize="8"
+                                                               FontFamily="Cascadia Code" TextAlignment="Center" TextWrapping="Wrap" />
+                                                </StackPanel>
+                                            </Border>
+                                            <StackPanel Grid.Column="1" Spacing="6">
+                                                <TextBlock Text="{Binding Text}" TextWrapping="WrapWholeWords" Foreground="{StaticResource ArgusTextBrush}" />
+                                                <TextBlock Text="{Binding MetadataText}" Style="{StaticResource MetaTextStyle}" FontFamily="Cascadia Code" FontSize="10" TextWrapping="Wrap" />
+                                                <TextBlock Text="{Binding Explanation}" Foreground="{StaticResource ArgusAccentBrush}" FontSize="11" TextWrapping="WrapWholeWords" />
+                                                <TextBlock Text="{Binding ComponentScoresText}" Style="{StaticResource MetaTextStyle}" FontFamily="Cascadia Code" FontSize="9" TextWrapping="Wrap" />
+                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                    <Button Content="Useful"
+                                                            Command="{Binding ViewModel.MarkMemoryUsefulCommand, ElementName=RootPage}"
+                                                            CommandParameter="{Binding}" />
+                                                    <Button Content="Not relevant"
+                                                            Command="{Binding ViewModel.MarkMemoryNotRelevantCommand, ElementName=RootPage}"
+                                                            CommandParameter="{Binding}" />
+                                                    <TextBlock Text="{Binding FeedbackText}" Style="{StaticResource MetaTextStyle}" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                        </Grid>
                                     </Border>
                                 </DataTemplate>
                             </ListView.ItemTemplate>
@@ -618,6 +666,125 @@
                 </Border>
             </Grid>
 
+            <Grid Visibility="{Binding CurrentView, Converter={StaticResource ViewVisibilityConverter}, ConverterParameter=Audits}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="380" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Column="0" Grid.Row="0" Spacing="10" Margin="0,0,16,10">
+                    <TextBlock Text="TOOL EXECUTION AUDITS" Style="{StaticResource PanelTitleStyle}" FontSize="20" />
+                    <Grid ColumnSpacing="10" RowSpacing="6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox PlaceholderText="Search Tool Name..." Text="{Binding AuditFilterToolName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" />
+                        <ComboBox Grid.Column="1" Header="Risk" ItemsSource="{Binding AuditRiskFilterOptions}" SelectedItem="{Binding AuditFilterRiskLevel, Mode=TwoWay}" MinWidth="100" />
+                        <ComboBox Grid.Column="2" Header="Approval" ItemsSource="{Binding AuditApprovalFilterOptions}" SelectedItem="{Binding AuditFilterApprovalStatus, Mode=TwoWay}" MinWidth="110" />
+                        <ComboBox Grid.Column="3" Header="Outcome" ItemsSource="{Binding AuditOutcomeFilterOptions}" SelectedItem="{Binding AuditFilterOutcome, Mode=TwoWay}" MinWidth="110" />
+                        <CheckBox Grid.Column="4" Content="Incomplete only" IsChecked="{Binding AuditFilterOnlyIncomplete, Mode=TwoWay}" VerticalAlignment="Bottom" Margin="0,0,0,4" />
+                    </Grid>
+                </StackPanel>
+
+                <ListView Grid.Column="0" Grid.Row="1" ItemsSource="{Binding AuditRecords}" SelectedItem="{Binding SelectedAuditRecord, Mode=TwoWay}" SelectionMode="Single" Margin="0,0,16,0">
+                    <ListView.HeaderTemplate>
+                        <DataTemplate>
+                            <Grid Padding="12,6" Background="{StaticResource SidebarBrush}" BorderBrush="{StaticResource ArgusMutedBorderBrush}" BorderThickness="0,0,0,1">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="140" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="100" />
+                                    <ColumnDefinition Width="110" />
+                                    <ColumnDefinition Width="80" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="TIMESTAMP" Style="{StaticResource MetaTextStyle}" FontWeight="Bold" />
+                                <TextBlock Grid.Column="1" Text="TOOL NAME" Style="{StaticResource MetaTextStyle}" FontWeight="Bold" />
+                                <TextBlock Grid.Column="2" Text="RISK" Style="{StaticResource MetaTextStyle}" FontWeight="Bold" />
+                                <TextBlock Grid.Column="3" Text="OUTCOME" Style="{StaticResource MetaTextStyle}" FontWeight="Bold" />
+                                <TextBlock Grid.Column="4" Text="DURATION" Style="{StaticResource MetaTextStyle}" FontWeight="Bold" HorizontalAlignment="Right" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.HeaderTemplate>
+                    <ListView.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Padding="12,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="140" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="100" />
+                                    <ColumnDefinition Width="110" />
+                                    <ColumnDefinition Width="80" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding StartedAt, Converter={StaticResource DateTimeOffsetToStringConverter}}" VerticalAlignment="Center" FontSize="11" Style="{StaticResource MetaTextStyle}" />
+                                <TextBlock Grid.Column="1" Text="{Binding ToolName}" VerticalAlignment="Center" FontWeight="SemiBold" FontSize="12" />
+                                <TextBlock Grid.Column="2" Text="{Binding RiskLevel}" VerticalAlignment="Center" FontSize="11" Style="{StaticResource MetaTextStyle}" />
+                                <Border Grid.Column="3" CornerRadius="4" Padding="6,2" HorizontalAlignment="Left" VerticalAlignment="Center"
+                                        Background="{Binding Outcome, Converter={StaticResource OutcomeToBrushConverter}}">
+                                    <TextBlock Text="{Binding Outcome}" FontSize="10" FontWeight="Bold" Foreground="White" />
+                                </Border>
+                                <TextBlock Grid.Column="4" Text="{Binding DurationMilliseconds, Converter={StaticResource DurationFormatConverter}}" VerticalAlignment="Center" FontSize="11" HorizontalAlignment="Right" Style="{StaticResource MetaTextStyle}" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+
+                <Border Grid.Column="1" Grid.Row="0" Grid.RowSpan="2" Padding="14" CornerRadius="8" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource ArgusMutedBorderBrush}" BorderThickness="1">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        
+                        <ScrollViewer Grid.Row="0" Margin="0,0,0,10">
+                            <StackPanel Spacing="12">
+                                <TextBlock Text="AUDIT RECORD DETAILS" Style="{StaticResource PanelTitleStyle}" FontSize="16" />
+                                <StackPanel Visibility="{Binding SelectedAuditRecord, Converter={StaticResource NullToVisibilityConverter}}">
+                                    <TextBlock Text="Execution ID" Style="{StaticResource MetaTextStyle}" />
+                                    <TextBox Text="{Binding SelectedAuditRecord.ExecutionId}" IsReadOnly="True" FontSize="11" FontFamily="Cascadia Code" />
+                                    
+                                    <TextBlock Text="Agent Run ID" Style="{StaticResource MetaTextStyle}" Margin="0,8,0,0" />
+                                    <TextBox Text="{Binding SelectedAuditRecord.AgentRunId}" IsReadOnly="True" FontSize="11" FontFamily="Cascadia Code" />
+                                    
+                                    <TextBlock Text="Conversation ID" Style="{StaticResource MetaTextStyle}" Margin="0,8,0,0" />
+                                    <TextBox Text="{Binding SelectedAuditRecord.ConversationId}" IsReadOnly="True" FontSize="11" FontFamily="Cascadia Code" />
+
+                                    <TextBlock Text="Approval Status" Style="{StaticResource MetaTextStyle}" Margin="0,8,0,0" />
+                                    <TextBox Text="{Binding SelectedAuditRecord.ApprovalStatus}" IsReadOnly="True" FontSize="12" />
+
+                                    <TextBlock Text="Arguments Summary" Style="{StaticResource MetaTextStyle}" Margin="0,8,0,0" />
+                                    <TextBox Text="{Binding SelectedAuditRecord.ArgumentsSummary}" IsReadOnly="True" TextWrapping="Wrap" MaxHeight="100" FontSize="11" FontFamily="Cascadia Code" />
+                                    
+                                    <TextBlock Text="Result Summary" Style="{StaticResource MetaTextStyle}" Margin="0,8,0,0" />
+                                    <TextBox Text="{Binding SelectedAuditRecord.ResultSummary}" IsReadOnly="True" TextWrapping="Wrap" MaxHeight="100" FontSize="11" FontFamily="Cascadia Code" />
+
+                                    <TextBlock Text="Error" Style="{StaticResource MetaTextStyle}" Margin="0,8,0,0" Visibility="{Binding SelectedAuditRecord.Error, Converter={StaticResource NullToVisibilityConverter}}" />
+                                    <TextBox Text="{Binding SelectedAuditRecord.Error}" IsReadOnly="True" TextWrapping="Wrap" MaxHeight="80" FontSize="11" Foreground="#FF6B6B" Visibility="{Binding SelectedAuditRecord.Error, Converter={StaticResource NullToVisibilityConverter}}" />
+                                </StackPanel>
+                                <TextBlock Text="Select an audit record to view execution details, arguments, and outcomes." Style="{StaticResource MetaTextStyle}" TextWrapping="WrapWholeWords"
+                                           Visibility="{Binding SelectedAuditRecord, Converter={StaticResource NullToVisibilityConverter}, ConverterParameter=!}" />
+                            </StackPanel>
+                        </ScrollViewer>
+
+                        <StackPanel Grid.Row="1" Spacing="10" BorderBrush="{StaticResource ArgusMutedBorderBrush}" BorderThickness="0,1,0,0" Padding="0,10,0,0">
+                            <TextBlock Text="LOG RETENTION" Style="{StaticResource PanelTitleStyle}" FontSize="14" />
+                            <TextBlock Text="Durable audits are preserved locally. You can prune old entries to manage database size." Style="{StaticResource MetaTextStyle}" TextWrapping="WrapWholeWords" />
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <Button Content="Prune >30 Days" Command="{Binding PruneAuditsCommand}" />
+                                <Button Content="Clear All Logs" Command="{Binding ClearAllAuditsCommand}" Background="#33FF4F5A" Foreground="#FFFF4F5A" BorderBrush="#88FF4F5A" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+            </Grid>
+
             <Grid Visibility="{Binding CurrentView, Converter={StaticResource ViewVisibilityConverter}, ConverterParameter=Settings}">
                 <ScrollViewer>
                     <StackPanel Spacing="14" MaxWidth="600">
@@ -634,9 +801,16 @@
                                 </ComboBox>
                                 <TextBlock Text="Model" Style="{StaticResource MetaTextStyle}" Margin="0,8,0,0" />
                                 <ComboBox ItemsSource="{Binding ModelOptions}" SelectedItem="{Binding SelectedModel, Mode=TwoWay}" />
+                                <TextBlock Text="{Binding ProviderAuthenticationHelpText}" Style="{StaticResource MetaTextStyle}"
+                                           Margin="0,6,0,0" TextWrapping="WrapWholeWords" />
                                 <StackPanel Visibility="{Binding IsApiKeyRequired, Converter={StaticResource BoolToVisibilityConverter}}" Spacing="4" Margin="0,8,0,0">
                                     <TextBlock Text="API Key" Style="{StaticResource MetaTextStyle}" />
                                     <PasswordBox x:Name="ApiKeyPasswordBox" PlaceholderText="{Binding ApiKeyPlaceholder}" PasswordChanged="ApiKeyBox_OnPasswordChanged" />
+                                </StackPanel>
+                                <StackPanel Visibility="{Binding IsOpenAiCodexProvider, Converter={StaticResource BoolToVisibilityConverter}}"
+                                            Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+                                    <Button Content="Sign in with ChatGPT" Command="{Binding SignInOpenAiCodexCommand}" />
+                                    <Button Content="Sign out" Command="{Binding SignOutOpenAiCodexCommand}" />
                                 </StackPanel>
 
                                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,12,0,0">
@@ -679,6 +853,75 @@
                                 <ToggleSwitch Header="Show LLM Thinking in App" IsOn="{Binding ShowThinkingInApp, Mode=TwoWay}" />
                                 <Button Command="{Binding SaveSystemSettingsCommand}" HorizontalAlignment="Left">Save Gateway Settings</Button>
                                 <TextBlock Text="{Binding TelegramGatewayLogsText}" Style="{StaticResource MetaTextStyle}" FontFamily="Cascadia Code" TextWrapping="WrapWholeWords" MaxLines="6" />
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="DATABASE MAINTENANCE" Style="{StaticResource PanelTitleStyle}" FontSize="18" Margin="0,12,0,0" />
+                        <Border Padding="14" CornerRadius="8" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource ArgusMutedBorderBrush}" BorderThickness="1">
+                            <StackPanel Spacing="10">
+                                <TextBlock Text="Active Database:" Style="{StaticResource MetaTextStyle}" />
+                                <TextBlock Text="{Binding DatabasePathDisplay}" FontSize="12" TextWrapping="Wrap" FontFamily="Cascadia Code" />
+                                
+                                <Grid ColumnSpacing="12" Margin="0,4,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="Database Size" Style="{StaticResource MetaTextStyle}" />
+                                        <TextBlock Text="{Binding DatabaseSizeDisplay}" FontSize="16" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="Integrity Check Status" Style="{StaticResource MetaTextStyle}" />
+                                        <TextBlock Text="{Binding DatabaseIntegrityDisplay}" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource ArgusAccentBrush}" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
+                                    <Button Content="Run Integrity Check" Command="{Binding RunIntegrityCheckCommand}" />
+                                </StackPanel>
+
+                                <Border BorderBrush="{StaticResource ArgusMutedBorderBrush}" BorderThickness="0,1,0,0" Padding="0,10,0,0" Margin="0,6,0,0">
+                                    <StackPanel Spacing="8">
+                                        <TextBlock Text="BACKUPS" Style="{StaticResource PanelTitleStyle}" FontSize="14" />
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBox Header="Custom Backup Suffix" PlaceholderText="e.g. manual" Text="{Binding CustomBackupName, Mode=TwoWay}" />
+                                            <Button Content="Create Backup" Command="{Binding CreateManualBackupCommand}" VerticalAlignment="Bottom" Grid.Column="1" />
+                                        </Grid>
+                                        
+                                        <TextBlock Text="Available Local Backups" Style="{StaticResource MetaTextStyle}" Margin="0,6,0,0" />
+                                        <ListView ItemsSource="{Binding BackupsCollection}" SelectionMode="None" MaxHeight="220" BorderBrush="{StaticResource ArgusMutedBorderBrush}" BorderThickness="1" CornerRadius="4">
+                                            <ListView.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid Padding="8,4">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding FileName}" FontSize="12" FontWeight="SemiBold" TextWrapping="NoWrap" />
+                                                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                                                <TextBlock Text="{Binding CreatedAt, Converter={StaticResource DateTimeOffsetToStringConverter}}" FontSize="10" Style="{StaticResource MetaTextStyle}" />
+                                                                <TextBlock Text="{Binding SizeDisplay}" FontSize="10" Style="{StaticResource MetaTextStyle}" />
+                                                            </StackPanel>
+                                                        </StackPanel>
+                                                        <Button Grid.Column="1" ToolTipService.ToolTip="Restore this backup" Command="{Binding DataContext.RestoreBackupCommand, ElementName=RootPage}" CommandParameter="{Binding}" Margin="0,0,4,0" Padding="6">
+                                                            <FontIcon Glyph="&#xE777;" FontSize="12" />
+                                                        </Button>
+                                                        <Button Grid.Column="2" ToolTipService.ToolTip="Delete backup" Command="{Binding DataContext.DeleteBackupCommand, ElementName=RootPage}" CommandParameter="{Binding}" Background="#33FF4F5A" Foreground="#FFFF4F5A" BorderBrush="#88FF4F5A" Padding="6">
+                                                            <FontIcon Glyph="&#xE74D;" FontSize="12" />
+                                                        </Button>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ListView.ItemTemplate>
+                                        </ListView>
+                                    </StackPanel>
+                                </Border>
                             </StackPanel>
                         </Border>
                     </StackPanel>
@@ -779,9 +1022,30 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Text="{Binding StatusText}" Style="{StaticResource MetaTextStyle}" FontSize="11" VerticalAlignment="Center" MaxLines="1" TextTrimming="CharacterEllipsis" />
-            <Button Grid.Column="1" Padding="6,2" BorderThickness="0" Background="Transparent" VerticalAlignment="Center" CornerRadius="4">
+            <Button Grid.Column="1" Padding="6,2" BorderThickness="0" Background="Transparent" VerticalAlignment="Center" CornerRadius="4"
+                    ToolTipService.ToolTip="{Binding ContextTrackerDetailText}">
+                <Button.Content>
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <TextBlock Text="CTX" Style="{StaticResource MetaTextStyle}" FontSize="9" />
+                        <TextBlock Text="{Binding ContextTrackerText}" Style="{StaticResource MetaTextStyle}" FontSize="11" />
+                        <TextBlock Text="{Binding ContextTrackerPercentText}" Style="{StaticResource MetaTextStyle}" FontSize="9" />
+                    </StackPanel>
+                </Button.Content>
+                <Button.Flyout>
+                    <Flyout Placement="Top">
+                        <StackPanel Width="280" Spacing="8" Padding="4">
+                            <TextBlock Text="CONTEXT USAGE" Style="{StaticResource PanelTitleStyle}" FontSize="12" />
+                            <ProgressBar Minimum="0" Maximum="100" Value="{Binding ContextTrackerPercent}" />
+                            <TextBlock Text="{Binding ContextTrackerText}" FontFamily="Cascadia Code" FontSize="13" />
+                            <TextBlock Text="{Binding ContextTrackerDetailText}" Style="{StaticResource MetaTextStyle}" TextWrapping="WrapWholeWords" />
+                        </StackPanel>
+                    </Flyout>
+                </Button.Flyout>
+            </Button>
+            <Button Grid.Column="2" Padding="6,2" BorderThickness="0" Background="Transparent" VerticalAlignment="Center" CornerRadius="4">
                 <Button.Content>
                     <StackPanel Orientation="Horizontal" Spacing="4">
                         <TextBlock Text="{Binding SelectedModel}" Style="{StaticResource MetaTextStyle}" FontSize="11" />
@@ -806,30 +1070,29 @@
                                 <TextBlock Text="Model" Style="{StaticResource MetaTextStyle}" FontSize="10" />
                                 <ComboBox ItemsSource="{Binding ModelOptions}" SelectedItem="{Binding SelectedModel, Mode=TwoWay}" HorizontalAlignment="Stretch" />
                             </StackPanel>
-                            <Border Height="1" Background="{StaticResource ArgusMutedBorderBrush}" Margin="0,4" />
-                            <ToggleSwitch Header="Thinking Mode" IsOn="{Binding IsThinkingEnabled, Mode=TwoWay}" OffContent="Disabled" OnContent="Enabled" />
-                            <StackPanel Spacing="4" Visibility="{Binding IsThinkingEnabled, Converter={StaticResource BoolToVisibilityConverter}}">
-                                <TextBlock Text="Reasoning Effort" Style="{StaticResource MetaTextStyle}" FontSize="10" />
-                                <Grid ColumnSpacing="4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <ToggleButton Content="Min" IsChecked="{Binding ReasoningEffortMinimal, Mode=TwoWay}" FontSize="9" Padding="2" HorizontalAlignment="Stretch" />
-                                    <ToggleButton Grid.Column="1" Content="Low" IsChecked="{Binding ReasoningEffortLow, Mode=TwoWay}" FontSize="9" Padding="2" HorizontalAlignment="Stretch" />
-                                    <ToggleButton Grid.Column="2" Content="Med" IsChecked="{Binding ReasoningEffortMedium, Mode=TwoWay}" FontSize="9" Padding="2" HorizontalAlignment="Stretch" />
-                                    <ToggleButton Grid.Column="3" Content="Hi" IsChecked="{Binding ReasoningEffortHigh, Mode=TwoWay}" FontSize="9" Padding="2" HorizontalAlignment="Stretch" />
-                                    <ToggleButton Grid.Column="4" Content="Max" IsChecked="{Binding ReasoningEffortMax, Mode=TwoWay}" FontSize="9" Padding="2" HorizontalAlignment="Stretch" />
-                                </Grid>
+                            <StackPanel Spacing="8" Visibility="{Binding HasReasoningControls, Converter={StaticResource BoolToVisibilityConverter}}">
+                                <Border Height="1" Background="{StaticResource ArgusMutedBorderBrush}" Margin="0,4" />
+                                <ToggleSwitch Header="Thinking Mode"
+                                              IsOn="{Binding IsThinkingEnabled, Mode=TwoWay}"
+                                              OffContent="Disabled"
+                                              OnContent="Enabled"
+                                              Visibility="{Binding CanToggleThinkingMode, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                <TextBlock Text="{Binding ReasoningCapabilityHelpText}"
+                                           Style="{StaticResource MetaTextStyle}"
+                                           FontSize="10"
+                                           TextWrapping="WrapWholeWords" />
+                                <StackPanel Spacing="4" Visibility="{Binding ShowReasoningEffortPicker, Converter={StaticResource BoolToVisibilityConverter}}">
+                                    <TextBlock Text="Reasoning Effort" Style="{StaticResource MetaTextStyle}" FontSize="10" />
+                                    <ComboBox ItemsSource="{Binding ReasoningEffortOptions}"
+                                              SelectedItem="{Binding SelectedReasoningEffort, Mode=TwoWay}"
+                                              HorizontalAlignment="Stretch" />
+                                </StackPanel>
                             </StackPanel>
                         </StackPanel>
                     </Flyout>
                 </Button.Flyout>
             </Button>
-            <Button Grid.Column="2" Padding="7,2" BorderThickness="0" Background="Transparent" VerticalAlignment="Center" CornerRadius="4">
+            <Button Grid.Column="3" Padding="7,2" BorderThickness="0" Background="Transparent" VerticalAlignment="Center" CornerRadius="4">
                 <Button.Content>
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <Border Width="7" Height="7" CornerRadius="4" Background="{StaticResource ArgusAccentBrush}"

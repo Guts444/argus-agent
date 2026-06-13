@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="Argus.App.StartupPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Background="{StaticResource ArgusBackgroundBrush}">
+
+    <Grid>
+        <Grid.Background>
+            <RadialGradientBrush Center="0.5,0.42" GradientOrigin="0.5,0.42" RadiusX="0.7" RadiusY="0.7">
+                <GradientStop Color="#3320EAF2" Offset="0" />
+                <GradientStop Color="#190A4870" Offset="0.42" />
+                <GradientStop Color="#00060910" Offset="1" />
+            </RadialGradientBrush>
+        </Grid.Background>
+
+        <Border Width="600"
+                MaxWidth="720"
+                Padding="34"
+                CornerRadius="16"
+                Background="#E80A1222"
+                BorderBrush="{StaticResource ArgusBorderBrush}"
+                BorderThickness="1"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center">
+            <StackPanel Spacing="18">
+                <StackPanel Orientation="Horizontal" Spacing="14">
+                    <Image Source="Assets/AppIcon.ico" Width="52" Height="52" />
+                    <StackPanel VerticalAlignment="Center" Spacing="2">
+                        <TextBlock Text="ARGUS" FontSize="24" FontWeight="SemiBold"
+                                   Foreground="{StaticResource ArgusTextBrush}" />
+                        <TextBlock Text="LOCAL WORKSPACE STARTUP"
+                                   FontFamily="Cascadia Code"
+                                   FontSize="11"
+                                   Foreground="{StaticResource ArgusAccentBrush}" />
+                    </StackPanel>
+                </StackPanel>
+
+                <Border Height="1" Background="{StaticResource ArgusMutedBorderBrush}" />
+
+                <StackPanel Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <ProgressRing x:Name="StartupProgressRing"
+                                      Width="22"
+                                      Height="22"
+                                      IsActive="True" />
+                        <TextBlock x:Name="StartupStatusText"
+                                   Text="Preparing Argus"
+                                   Style="{StaticResource PanelTitleStyle}"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                    <TextBlock x:Name="StartupDetailText"
+                               Text="Checking local workspace data."
+                               Style="{StaticResource MetaTextStyle}"
+                               TextWrapping="WrapWholeWords"
+                               Margin="34,0,0,0" />
+                </StackPanel>
+
+                <Border x:Name="RecoveryPanel"
+                        Visibility="Collapsed"
+                        Padding="16"
+                        CornerRadius="10"
+                        Background="#33182034"
+                        BorderBrush="{StaticResource ArgusMutedBorderBrush}"
+                        BorderThickness="1">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="STARTUP RECOVERY"
+                                   FontFamily="Cascadia Code"
+                                   FontSize="11"
+                                   Foreground="{StaticResource ArgusAmberBrush}" />
+                        <TextBlock x:Name="RecoveryDetailText"
+                                   Style="{StaticResource MetaTextStyle}"
+                                   TextWrapping="WrapWholeWords" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button x:Name="RetryButton"
+                                    Content="Retry startup"
+                                    Click="RetryButton_OnClick" />
+                            <Button x:Name="RestoreButton"
+                                    Content="Restore latest backup"
+                                    Click="RestoreButton_OnClick" />
+                            <Button Content="Open data folder"
+                                    Click="OpenDataFolderButton_OnClick" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="Your database stays on this PC. Startup backups are stored beside it and only the five newest are retained."
+                           Style="{StaticResource MetaTextStyle}"
+                           FontSize="10"
+                           TextWrapping="WrapWholeWords" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Page>

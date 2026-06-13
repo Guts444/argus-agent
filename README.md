@@ -91,8 +91,10 @@ recommended. Docker Desktop is optional and only required for SearXNG research.
 
 ### LLM choice and reasoning controls
 
-- Connects to DeepSeek, OpenAI, OpenRouter, Ollama, LM Studio, vLLM, or another
-  OpenAI-compatible local or hosted LLM endpoint.
+- Connects to DeepSeek, OpenAI, Anthropic, OpenRouter, Ollama, LM Studio, vLLM,
+  or another OpenAI-compatible local or hosted LLM endpoint.
+- Supports OpenAI API keys or ChatGPT account access through the official
+  standalone Codex CLI.
 - Switches LLM service and model from the bottom status bar.
 - Refreshes available OpenAI and OpenRouter model catalogs.
 - Supports thinking mode and configurable reasoning effort where the selected
@@ -188,8 +190,29 @@ docker compose -f docker-compose.searxng.yml down
 Open **Settings > LLM Connection**, choose a service and model, then enter the
 credential required by that LLM (no API key is required for trusted localhost connections). You can use:
 
-- Hosted LLMs through DeepSeek, OpenAI, or OpenRouter.
+- Hosted LLMs through DeepSeek, OpenAI, Anthropic, or OpenRouter.
 - Local LLMs through Ollama, LM Studio, Hugging Face, vLLM, or another compatible server.
+
+### OpenAI API key vs. ChatGPT login
+
+- Choose **OpenAI** to use the OpenAI API with separate API billing.
+- Choose **OpenAI Codex (ChatGPT)** to use models available to an eligible
+  ChatGPT account through OpenAI's official Codex app-server.
+- The ChatGPT option requires the standalone Codex CLI:
+
+```powershell
+npm install -g @openai/codex
+```
+
+Restart Argus, select **OpenAI Codex (ChatGPT)**, and click
+**Sign in with ChatGPT**. Codex stores and refreshes its own account tokens;
+Argus does not copy them into SQLite or Windows Credential Locker. The Codex
+CLI is free to install, but available models and usage limits depend on the
+ChatGPT plan or credits attached to the signed-in account.
+
+Anthropic does not permit third-party products to route Claude Free, Pro, or
+Max subscription credentials. Choose **Anthropic** and provide a Claude Console
+API key; Claude API billing is separate from a Claude subscription.
 
 ### Local LLM Setup (Ollama, LM Studio, Hugging Face)
 
@@ -306,10 +329,7 @@ Argus.Tests  unit and integration coverage
 
 ## Status
 
-Argus `v0.1.5` includes the supervised agent loop, durable memory, connected
-graph context, local-project awareness, LLM integrations, private web research,
-Telegram access, desktop installer, and in-app updates. Image, voice, and
-general file-analysis skills are not yet included.
+Argus `v0.2.0` adds provider adapter architecture, fail-closed tool approval with durable audit trails, scored memory recall with feedback, OpenAI ChatGPT login via Codex, Anthropic API support, non-blocking startup with verified backups, project context privacy redaction, database maintenance dashboard, and a comprehensive test suite.
 
 ## License
 

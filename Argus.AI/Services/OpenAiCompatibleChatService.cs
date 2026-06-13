@@ -6,13 +6,188 @@ using Argus.Core.Services;
 
 namespace Argus.AI.Services;
 
-public sealed class OpenAiCompatibleChatService(HttpClient httpClient, ISecretStore secretStore) : IAiChatService
+public sealed class OpenAiCompatibleChatService(
+    HttpClient httpClient,
+    ISecretStore secretStore,
+    IOpenAiCodexService? openAiCodexService = null,
+    ISettingsService? settingsService = null) : IAiChatService, IAiProviderAdapter
 {
+    public string Id => "openai-compatible";
+
+    public bool CanHandle(AiProviderProfile profile) =>
+        !AiModelCatalog.IsOpenAiCodexProvider(profile.ProviderType);
+
+    public AiProviderCapabilities GetCapabilities(AiProviderProfile profile)
+    {
+        if (IsTrustedLocalEndpoint(profile.BaseUrl))
+        {
+            return new(
+                Id,
+                AiProviderKind.Local,
+                AiAuthenticationMode.LocalOptional,
+                SupportsDynamicModels: true,
+                SupportsEmbeddings: true,
+                SupportsThinkingToggle: false,
+                ReasoningAlwaysEnabled: false,
+                "Local endpoints do not require an API key.",
+                "Reasoning controls depend on the selected local model and server.");
+        }
+
+        if (IsDeepSeekProfile(profile))
+        {
+            return new(
+                Id,
+                AiProviderKind.DeepSeek,
+                AiAuthenticationMode.ApiKey,
+                SupportsDynamicModels: false,
+                SupportsEmbeddings: false,
+                SupportsThinkingToggle: true,
+                ReasoningAlwaysEnabled: false,
+                "DeepSeek uses an API key stored in Windows Credential Locker.",
+                "Thinking can be disabled. When enabled, DeepSeek V4 accepts high or max reasoning effort.");
+        }
+
+        if (IsOpenAIProfile(profile))
+        {
+            return new(
+                Id,
+                AiProviderKind.OpenAi,
+                AiAuthenticationMode.ApiKey,
+                SupportsDynamicModels: true,
+                SupportsEmbeddings: true,
+                SupportsThinkingToggle: false,
+                ReasoningAlwaysEnabled: false,
+                "OpenAI API access uses API billing and is separate from ChatGPT subscription access.",
+                "Reasoning effort is available only for models that expose it. Choose none when the model allows reasoning to be omitted.");
+        }
+
+        if (IsOpenRouterProfile(profile))
+        {
+            return new(
+                Id,
+                AiProviderKind.OpenRouter,
+                AiAuthenticationMode.ApiKey,
+                SupportsDynamicModels: true,
+                SupportsEmbeddings: false,
+                SupportsThinkingToggle: true,
+                ReasoningAlwaysEnabled: false,
+                "OpenRouter uses an API key stored in Windows Credential Locker.",
+                "Reasoning controls vary by routed model and are sent only when enabled.");
+        }
+
+        if (IsAnthropicProfile(profile))
+        {
+            return new(
+                Id,
+                AiProviderKind.Anthropic,
+                AiAuthenticationMode.ApiKey,
+                SupportsDynamicModels: false,
+                SupportsEmbeddings: false,
+                SupportsThinkingToggle: false,
+                ReasoningAlwaysEnabled: false,
+                "Anthropic access requires a Claude Console API key. Claude account OAuth is not offered.",
+                "Anthropic reasoning controls are not exposed until the native Messages API adapter is completed.");
+        }
+
+        return new(
+            Id,
+            AiProviderKind.OpenAiCompatible,
+            AiAuthenticationMode.ApiKey,
+            SupportsDynamicModels: true,
+            SupportsEmbeddings: true,
+            SupportsThinkingToggle: false,
+            ReasoningAlwaysEnabled: false,
+            "The provider API key is stored in Windows Credential Locker.",
+            "Reasoning controls depend on the selected OpenAI-compatible server.");
+    }
+
+    public IReadOnlyList<AiModelMetadata> GetFallbackModels(AiProviderProfile profile)
+    {
+        var knownModels = AiModelCatalog.GetKnownModels(profile.ProviderType, profile.BaseUrl);
+        if (knownModels.Count > 0)
+        {
+            return knownModels;
+        }
+
+        return string.IsNullOrWhiteSpace(profile.Model)
+            ? []
+            : [new AiModelMetadata(profile.Model, profile.Model)];
+    }
+
+    public async Task<IReadOnlyList<AiModelMetadata>> ListModelsAsync(
+        AiProviderProfile profile,
+        bool forceRefresh = false,
+        CancellationToken cancellationToken = default)
+    {
+        if (IsDeepSeekProfile(profile) || IsAnthropicProfile(profile))
+        {
+            return GetFallbackModels(profile);
+        }
+
+        try
+        {
+            if (IsOpenRouterProfile(profile))
+            {
+                return await LoadOpenRouterModelsAsync(profile, forceRefresh, cancellationToken);
+            }
+
+            if (IsOpenAIProfile(profile))
+            {
+                return await LoadOpenAiModelsAsync(profile, forceRefresh, cancellationToken);
+            }
+
+            return await LoadOpenAiCompatibleModelsAsync(profile, forceRefresh, cancellationToken);
+        }
+        catch
+        {
+            return GetFallbackModels(profile);
+        }
+    }
+
+    public async Task<AiProviderConnectionStatus> GetConnectionStatusAsync(
+        AiProviderProfile profile,
+        CancellationToken cancellationToken = default)
+    {
+        var capabilities = GetCapabilities(profile);
+        if (capabilities.AuthenticationMode == AiAuthenticationMode.LocalOptional)
+        {
+            return new(true, capabilities.AuthenticationHelpText);
+        }
+
+        var storedKey = await secretStore.GetSecretAsync(profile.ApiKeyStorageKey, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(storedKey))
+        {
+            return new(true, capabilities.AuthenticationHelpText);
+        }
+
+        if (!string.IsNullOrWhiteSpace(GetEnvironmentApiKey(profile)))
+        {
+            return new(
+                true,
+                $"{profile.Name} is using an API key from the environment.",
+                UsesEnvironmentCredential: true);
+        }
+
+        return new(
+            false,
+            $"Add an API key for {profile.Name}. It will be stored in Windows Credential Locker.");
+    }
+
     public async Task<AiChatResult> SendAsync(AiProviderProfile? profile, IReadOnlyList<AiChatTurn> messages, CancellationToken cancellationToken = default)
     {
         if (profile is null)
         {
             return new AiChatResult("Configure an AI provider in Settings before chatting.", SetupRequired: true);
+        }
+
+        if (AiModelCatalog.IsOpenAiCodexProvider(profile.ProviderType))
+        {
+            return openAiCodexService is null
+                ? new AiChatResult(
+                    "The OpenAI Codex account provider is unavailable.",
+                    SetupRequired: true,
+                    Error: "Install the standalone Codex CLI and restart Argus.")
+                : await openAiCodexService.SendAsync(profile, messages, cancellationToken);
         }
 
         var localNoKeyAllowed = IsTrustedLocalEndpoint(profile.BaseUrl);
@@ -50,7 +225,8 @@ public sealed class OpenAiCompatibleChatService(HttpClient httpClient, ISecretSt
             AddOpenAiRoutingHeaders(request, profile);
             AddOpenRouterHeaders(request, profile);
             var thinkingEnabled = isDeepSeek && string.Equals(profile.ThinkingMode, "enabled", StringComparison.OrdinalIgnoreCase);
-            var openAiReasoningEnabled = isOpenAI && string.Equals(profile.ThinkingMode, "enabled", StringComparison.OrdinalIgnoreCase);
+            var openAiReasoningEnabled = isOpenAI &&
+                !string.Equals(profile.ReasoningEffort, "none", StringComparison.OrdinalIgnoreCase);
             var openRouterReasoningEnabled = isOpenRouter && string.Equals(profile.ThinkingMode, "enabled", StringComparison.OrdinalIgnoreCase);
             var payload = new Dictionary<string, object?>
             {
@@ -62,6 +238,20 @@ public sealed class OpenAiCompatibleChatService(HttpClient httpClient, ISecretSt
             if (isAnthropic)
             {
                 payload["max_tokens"] = 4096;
+                payload["messages"] = messages
+                    .Where(message => message.Role is "user" or "assistant")
+                    .Select(message => new { role = message.Role, content = message.Content })
+                    .ToArray();
+                var systemPrompt = string.Join(
+                    "\n\n",
+                    messages
+                        .Where(message => message.Role == "system")
+                        .Select(message => message.Content)
+                        .Where(content => !string.IsNullOrWhiteSpace(content)));
+                if (!string.IsNullOrWhiteSpace(systemPrompt))
+                {
+                    payload["system"] = systemPrompt;
+                }
             }
 
             if (isDeepSeek)
@@ -85,7 +275,7 @@ public sealed class OpenAiCompatibleChatService(HttpClient httpClient, ISecretSt
                 };
             }
 
-            if (!thinkingEnabled && !openAiReasoningEnabled && !openRouterReasoningEnabled)
+            if (!isAnthropic && !thinkingEnabled && !openAiReasoningEnabled && !openRouterReasoningEnabled)
             {
                 payload["temperature"] = 0.4;
             }
@@ -105,9 +295,15 @@ public sealed class OpenAiCompatibleChatService(HttpClient httpClient, ISecretSt
 
             if (isAnthropic)
             {
-                if (document.RootElement.TryGetProperty("content", out var contentArray) && contentArray.ValueKind == JsonValueKind.Array && contentArray.GetArrayLength() > 0)
+                if (document.RootElement.TryGetProperty("content", out var contentArray) &&
+                    contentArray.ValueKind == JsonValueKind.Array)
                 {
-                    content = contentArray[0].TryGetProperty("text", out var textElement) ? textElement.GetString() : string.Empty;
+                    content = string.Join(
+                        "\n",
+                        contentArray.EnumerateArray()
+                            .Where(block => block.TryGetProperty("type", out var type) && type.GetString() == "text")
+                            .Select(block => block.TryGetProperty("text", out var text) ? text.GetString() : null)
+                            .Where(text => !string.IsNullOrWhiteSpace(text)));
                 }
             }
             else
@@ -160,6 +356,160 @@ public sealed class OpenAiCompatibleChatService(HttpClient httpClient, ISecretSt
         {
             return new AiChatResult(string.Empty, Error: ex.Message);
         }
+    }
+
+    private async Task<IReadOnlyList<AiModelMetadata>> LoadOpenRouterModelsAsync(
+        AiProviderProfile profile,
+        bool forceRefresh,
+        CancellationToken cancellationToken)
+    {
+        const string cacheKey = "ModelCatalog:OpenRouter";
+        var cached = forceRefresh || settingsService is null
+            ? null
+            : await settingsService.GetSettingAsync(cacheKey, null, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(cached))
+        {
+            return FilterOpenRouterModels(AiModelCatalog.ParseOpenRouterModels(cached));
+        }
+
+        var apiKey = await ResolveApiKeyAsync(profile, cancellationToken);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://openrouter.ai/api/v1/models");
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        }
+        AddOpenRouterHeaders(request, profile);
+
+        using var response = await httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            return GetFallbackModels(profile);
+        }
+
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (settingsService is not null)
+        {
+            await settingsService.SaveSettingAsync(cacheKey, body, cancellationToken);
+        }
+
+        var models = FilterOpenRouterModels(AiModelCatalog.ParseOpenRouterModels(body));
+        return models.Count > 0 ? models : GetFallbackModels(profile);
+    }
+
+    private static IReadOnlyList<AiModelMetadata> FilterOpenRouterModels(
+        IReadOnlyList<AiModelMetadata> models)
+    {
+        return models
+            .Where(model =>
+                model.Id.StartsWith("deepseek/", StringComparison.OrdinalIgnoreCase) ||
+                model.Id.StartsWith("openai/", StringComparison.OrdinalIgnoreCase) ||
+                model.Id.StartsWith("anthropic/", StringComparison.OrdinalIgnoreCase) ||
+                model.Id.StartsWith("google/", StringComparison.OrdinalIgnoreCase) ||
+                model.Id.StartsWith("qwen/", StringComparison.OrdinalIgnoreCase) ||
+                model.Id.Equals("openrouter/auto", StringComparison.OrdinalIgnoreCase))
+            .Take(250)
+            .ToList();
+    }
+
+    private async Task<IReadOnlyList<AiModelMetadata>> LoadOpenAiModelsAsync(
+        AiProviderProfile profile,
+        bool forceRefresh,
+        CancellationToken cancellationToken)
+    {
+        const string cacheKey = "ModelCatalog:OpenAI";
+        var cached = forceRefresh || settingsService is null
+            ? null
+            : await settingsService.GetSettingAsync(cacheKey, null, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(cached))
+        {
+            var cachedModels = AiModelCatalog.ParseOpenAiModels(cached);
+            if (cachedModels.Count > 0)
+            {
+                return cachedModels;
+            }
+        }
+
+        var apiKey = await ResolveApiKeyAsync(profile, cancellationToken);
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            return GetFallbackModels(profile);
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, BuildModelsUrl(profile.BaseUrl));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        AddOpenAiRoutingHeaders(request, profile);
+
+        using var response = await httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            return GetFallbackModels(profile);
+        }
+
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (settingsService is not null)
+        {
+            await settingsService.SaveSettingAsync(cacheKey, body, cancellationToken);
+        }
+
+        var models = AiModelCatalog.ParseOpenAiModels(body);
+        return models.Count > 0 ? models : GetFallbackModels(profile);
+    }
+
+    private async Task<IReadOnlyList<AiModelMetadata>> LoadOpenAiCompatibleModelsAsync(
+        AiProviderProfile profile,
+        bool forceRefresh,
+        CancellationToken cancellationToken)
+    {
+        if (!forceRefresh && !string.IsNullOrWhiteSpace(profile.Model))
+        {
+            return GetFallbackModels(profile);
+        }
+
+        var apiKey = await ResolveApiKeyAsync(profile, cancellationToken);
+        if (string.IsNullOrWhiteSpace(apiKey) && !IsTrustedLocalEndpoint(profile.BaseUrl))
+        {
+            return GetFallbackModels(profile);
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, BuildModelsUrl(profile.BaseUrl));
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        }
+
+        using var response = await httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            return GetFallbackModels(profile);
+        }
+
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        var models = AiModelCatalog.ParseOpenAiModels(body, isLocalOrCustom: true);
+        return models.Count > 0 ? models : GetFallbackModels(profile);
+    }
+
+    private async Task<string?> ResolveApiKeyAsync(
+        AiProviderProfile profile,
+        CancellationToken cancellationToken)
+    {
+        return await secretStore.GetSecretAsync(profile.ApiKeyStorageKey, cancellationToken)
+            ?? GetEnvironmentApiKey(profile);
+    }
+
+    private static Uri BuildModelsUrl(string baseUrl)
+    {
+        var trimmed = baseUrl.Trim().TrimEnd('/');
+        if (trimmed.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
+        {
+            trimmed = trimmed[..^"/chat/completions".Length];
+        }
+
+        if (trimmed.EndsWith("/models", StringComparison.OrdinalIgnoreCase))
+        {
+            return new Uri(trimmed);
+        }
+
+        return new Uri($"{trimmed}/models");
     }
 
     private static Uri BuildChatUrl(string baseUrl, bool isAnthropic)
@@ -281,6 +631,11 @@ public sealed class OpenAiCompatibleChatService(HttpClient httpClient, ISecretSt
             candidates.Add("ARGUS_OPENROUTER_API_KEY");
             candidates.Add("OPENROUTER_API_KEY");
         }
+        else if (IsAnthropicProfile(profile))
+        {
+            candidates.Add("ARGUS_ANTHROPIC_API_KEY");
+            candidates.Add("ANTHROPIC_API_KEY");
+        }
 
         if (!string.IsNullOrWhiteSpace(profile.ApiKeyStorageKey))
         {
@@ -334,7 +689,7 @@ public sealed class OpenAiCompatibleChatService(HttpClient httpClient, ISecretSt
 
     public async Task<float[]?> GenerateEmbeddingAsync(AiProviderProfile? profile, string text, CancellationToken cancellationToken = default)
     {
-        if (profile is null)
+        if (profile is null || AiModelCatalog.IsOpenAiCodexProvider(profile.ProviderType))
         {
             return null;
         }

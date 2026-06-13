@@ -14,13 +14,13 @@ public static class AiModelCatalog
 {
     public static readonly IReadOnlyList<AiModelMetadata> DeepSeekModels =
     [
-        new("deepseek-v4-pro", "DeepSeek V4 Pro", 1_048_576, 393_216, true, ["high", "max"]),
-        new("deepseek-v4-flash", "DeepSeek V4 Flash", 1_048_576, 393_216, true, ["high", "max"])
+        new("deepseek-v4-pro", "DeepSeek V4 Pro", 1_000_000, 393_216, true, ["high", "max"]),
+        new("deepseek-v4-flash", "DeepSeek V4 Flash", 1_000_000, 393_216, true, ["high", "max"])
     ];
 
     public static readonly IReadOnlyList<AiModelMetadata> OpenAiModels =
     [
-        new("gpt-5.5", "GPT-5.5", 1_048_576, 131_072, true, ["none", "low", "medium", "high", "xhigh"]),
+        new("gpt-5.5", "GPT-5.5", 1_050_000, 128_000, true, ["none", "low", "medium", "high", "xhigh"]),
         new("gpt-5.4", "GPT-5.4", 1_048_576, 131_072, true, ["none", "low", "medium", "high", "xhigh"]),
         new("gpt-5.4-mini", "GPT-5.4 mini", 409_600, 131_072, true, ["none", "low", "medium", "high", "xhigh"]),
         new("gpt-5", "GPT-5", 400_000, 128_000, true, ["none", "low", "medium", "high", "xhigh"]),
@@ -29,17 +29,25 @@ public static class AiModelCatalog
         new("gpt-4.1", "GPT-4.1", 1_048_576, 32_768, false, ["none"])
     ];
 
+    public static readonly IReadOnlyList<AiModelMetadata> CodexModels =
+    [
+        new("gpt-5.5", "GPT-5.5", 258_000, 128_000, true, ["low", "medium", "high", "xhigh"]),
+        new("gpt-5.4", "GPT-5.4", 258_000, 131_072, true, ["low", "medium", "high", "xhigh"]),
+        new("gpt-5.4-mini", "GPT-5.4 mini", 258_000, 131_072, true, ["low", "medium", "high", "xhigh"])
+    ];
+
     public static readonly IReadOnlyList<AiModelMetadata> AnthropicModels =
     [
-        new("claude-3-5-sonnet-latest", "Claude 3.5 Sonnet (Latest)", 200_000, 8192),
-        new("claude-3-5-haiku-latest", "Claude 3.5 Haiku (Latest)", 200_000, 8192),
-        new("claude-3-opus-latest", "Claude 3 Opus (Latest)", 200_000, 4096)
+        new("claude-fable-5", "Claude Fable 5", 1_000_000, 128_000, true),
+        new("claude-opus-4-8", "Claude Opus 4.8", 1_000_000, 128_000, true),
+        new("claude-sonnet-4-6", "Claude Sonnet 4.6", 1_000_000, 64_000, true),
+        new("claude-haiku-4-5", "Claude Haiku 4.5", 200_000, 64_000, true)
     ];
 
     public static readonly IReadOnlyList<AiModelMetadata> OpenRouterFallbackModels =
     [
-        new("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro", 1_048_576, null, true),
-        new("deepseek/deepseek-v4-flash", "DeepSeek V4 Flash", 1_048_576, null, true),
+        new("deepseek/deepseek-v4-pro", "DeepSeek V4 Pro", 1_000_000, null, true, ["high", "max"]),
+        new("deepseek/deepseek-v4-flash", "DeepSeek V4 Flash", 1_000_000, null, true, ["high", "max"]),
         new("openrouter/auto", "OpenRouter Auto", null, null, false)
     ];
 
@@ -51,6 +59,11 @@ public static class AiModelCatalog
 
     public static IReadOnlyList<AiModelMetadata> GetKnownModels(string providerType, string baseUrl)
     {
+        if (IsOpenAiCodexProvider(providerType))
+        {
+            return CodexModels;
+        }
+
         if (IsDeepSeekProvider(providerType, baseUrl))
         {
             return DeepSeekModels;
@@ -84,6 +97,11 @@ public static class AiModelCatalog
     {
         return providerType.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
             baseUrl.Contains("api.openai.com", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static bool IsOpenAiCodexProvider(string providerType)
+    {
+        return providerType.Equals("OpenAICodex", StringComparison.OrdinalIgnoreCase);
     }
 
     public static bool IsAnthropicProvider(string providerType, string baseUrl)
@@ -133,6 +151,7 @@ public static class AiModelCatalog
             return [];
         }
 
+        var known = OpenRouterFallbackModels.ToDictionary(model => model.Id, StringComparer.OrdinalIgnoreCase);
         var models = new List<AiModelMetadata>();
         foreach (var item in data.EnumerateArray())
         {
@@ -164,7 +183,14 @@ public static class AiModelCatalog
                         string.Equals(value, "include_reasoning", StringComparison.OrdinalIgnoreCase));
             }
 
-            models.Add(new AiModelMetadata(id, name ?? id, contextLength, maxOutput, supportsThinking));
+            known.TryGetValue(id, out var metadata);
+            models.Add(new AiModelMetadata(
+                id,
+                name ?? metadata?.Name ?? id,
+                contextLength ?? metadata?.ContextWindowTokens,
+                maxOutput ?? metadata?.MaxOutputTokens,
+                supportsThinking || metadata?.SupportsThinking == true,
+                metadata?.ReasoningEfforts));
         }
 
         return models;

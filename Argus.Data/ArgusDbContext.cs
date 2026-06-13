@@ -13,6 +13,8 @@ public sealed class ArgusDbContext(DbContextOptions<ArgusDbContext> options) : D
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<Memory> Memories => Set<Memory>();
+    public DbSet<MemoryRecallFeedback> MemoryRecallFeedback => Set<MemoryRecallFeedback>();
+    public DbSet<ToolExecutionAudit> ToolExecutionAudits => Set<ToolExecutionAudit>();
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<AiProviderProfile> AiProviderProfiles => Set<AiProviderProfile>();
 
@@ -124,6 +126,40 @@ public sealed class ArgusDbContext(DbContextOptions<ArgusDbContext> options) : D
                 .WithMany()
                 .HasForeignKey(memory => memory.LinkedNodeId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<MemoryRecallFeedback>(entity =>
+        {
+            entity.ToTable("MemoryRecallFeedback");
+            entity.HasKey(feedback => feedback.Id);
+            entity.Property(feedback => feedback.Query).IsRequired();
+            entity.Property(feedback => feedback.Rating).HasMaxLength(32).IsRequired();
+            entity.Property(feedback => feedback.CreatedAt).HasConversion(dateTimeOffsetConverter);
+            entity.HasIndex(feedback => feedback.MemoryId);
+            entity.HasIndex(feedback => feedback.CreatedAt);
+            entity.HasOne(feedback => feedback.Memory)
+                .WithMany()
+                .HasForeignKey(feedback => feedback.MemoryId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ToolExecutionAudit>(entity =>
+        {
+            entity.ToTable("ToolExecutionAudits");
+            entity.HasKey(audit => audit.Id);
+            entity.Property(audit => audit.ToolName).HasMaxLength(120).IsRequired();
+            entity.Property(audit => audit.RiskLevel).HasMaxLength(32).IsRequired();
+            entity.Property(audit => audit.ApprovalStatus).HasMaxLength(32).IsRequired();
+            entity.Property(audit => audit.Outcome).HasMaxLength(32).IsRequired();
+            entity.Property(audit => audit.ArgumentsSummary).IsRequired();
+            entity.Property(audit => audit.ResultSummary).IsRequired();
+            entity.Property(audit => audit.Error).HasMaxLength(1000);
+            entity.Property(audit => audit.StartedAt).HasConversion(dateTimeOffsetConverter);
+            entity.Property(audit => audit.CompletedAt).HasConversion(dateTimeOffsetConverter);
+            entity.HasIndex(audit => audit.ExecutionId).IsUnique();
+            entity.HasIndex(audit => audit.AgentRunId);
+            entity.HasIndex(audit => audit.ConversationId);
+            entity.HasIndex(audit => audit.StartedAt);
         });
 
         modelBuilder.Entity<AppSetting>(entity =>

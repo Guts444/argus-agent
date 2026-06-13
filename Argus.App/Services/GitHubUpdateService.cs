@@ -96,6 +96,12 @@ public sealed class GitHubUpdateService(HttpClient httpClient) : IAppUpdateServi
         AppUpdateInfo update,
         CancellationToken cancellationToken = default)
     {
+        if (!IsValidSha256(update.InstallerSha256))
+        {
+            throw new InvalidDataException(
+                "The release does not provide a valid SHA-256 digest for its installer.");
+        }
+
         var updateDirectory = Path.Combine(Path.GetTempPath(), "Argus", "updates");
         Directory.CreateDirectory(updateDirectory);
         var installerPath = Path.Combine(updateDirectory, $"ArgusAgentSetup-x64-{update.Version}.exe");
@@ -112,16 +118,13 @@ public sealed class GitHubUpdateService(HttpClient httpClient) : IAppUpdateServi
             await source.CopyToAsync(destination, cancellationToken);
         }
 
-        if (!string.IsNullOrWhiteSpace(update.InstallerSha256))
+        await using var installerStream = File.OpenRead(installerPath);
+        var actualHash = Convert.ToHexString(
+            await SHA256.HashDataAsync(installerStream, cancellationToken));
+        if (!actualHash.Equals(update.InstallerSha256, StringComparison.OrdinalIgnoreCase))
         {
-            await using var installerStream = File.OpenRead(installerPath);
-            var actualHash = Convert.ToHexString(
-                await SHA256.HashDataAsync(installerStream, cancellationToken));
-            if (!actualHash.Equals(update.InstallerSha256, StringComparison.OrdinalIgnoreCase))
-            {
-                File.Delete(installerPath);
-                throw new InvalidDataException("The downloaded installer failed SHA-256 verification.");
-            }
+            File.Delete(installerPath);
+            throw new InvalidDataException("The downloaded installer failed SHA-256 verification.");
         }
 
         Process.Start(new ProcessStartInfo
@@ -134,6 +137,11 @@ public sealed class GitHubUpdateService(HttpClient httpClient) : IAppUpdateServi
 
     private static string GetCurrentVersion()
     {
-        return typeof(GitHubUpdateService).Assembly.GetName().Version?.ToString(3) ?? "0.1.5";
+        return typeof(GitHubUpdateService).Assembly.GetName().Version?.ToString(3) ?? "0.2.0";
+    }
+
+    private static bool IsValidSha256(string? value)
+    {
+        return value is { Length: 64 } && value.All(Uri.IsHexDigit);
     }
 }

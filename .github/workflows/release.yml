@@ -37,7 +37,7 @@ jobs:
 
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag @assets --clobber
+            gh release upload $tag @assets
           }
           else {
             gh release create $tag @assets `

@@ -23,6 +23,9 @@
             <converters:ThinkingBodyConverter x:Key="ThinkingBodyConverter" />
             <converters:ThinkingActiveConverter x:Key="ThinkingActiveConverter" />
             <converters:ThinkingActiveVisibilityConverter x:Key="ThinkingActiveVisibilityConverter" />
+            <converters:DateTimeOffsetToStringConverter x:Key="DateTimeOffsetToStringConverter" />
+            <converters:OutcomeToBrushConverter x:Key="OutcomeToBrushConverter" />
+            <converters:DurationFormatConverter x:Key="DurationFormatConverter" />
 
             <SolidColorBrush x:Key="ArgusBackgroundBrush" Color="#FF060910" />
             <SolidColorBrush x:Key="SidebarBrush" Color="#EE080D18" />

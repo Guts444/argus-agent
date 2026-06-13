@@ -36,6 +36,8 @@ public sealed class GraphCanvasControl : Grid
     private Rect minimapRect;
     private bool isPanning;
     private bool isMinimapPanning;
+    private bool subscriptionsAttached;
+    private bool renderingAttached;
 
     public GraphCanvasControl()
     {
@@ -143,7 +145,7 @@ public sealed class GraphCanvasControl : Grid
 
     private void Attach(MainPageViewModel? viewModel)
     {
-        if (viewModel is null)
+        if (viewModel is null || subscriptionsAttached)
         {
             return;
         }
@@ -151,11 +153,12 @@ public sealed class GraphCanvasControl : Grid
         viewModel.Nodes.CollectionChanged += OnCollectionChanged;
         viewModel.Edges.CollectionChanged += OnCollectionChanged;
         viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        subscriptionsAttached = true;
     }
 
     private void Detach(MainPageViewModel? viewModel)
     {
-        if (viewModel is null)
+        if (viewModel is null || !subscriptionsAttached)
         {
             return;
         }
@@ -163,24 +166,42 @@ public sealed class GraphCanvasControl : Grid
         viewModel.Nodes.CollectionChanged -= OnCollectionChanged;
         viewModel.Edges.CollectionChanged -= OnCollectionChanged;
         viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        subscriptionsAttached = false;
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        Attach(ViewModel);
         animationClock.Restart();
-        CompositionTarget.Rendering += OnRendering;
+        if (!renderingAttached)
+        {
+            CompositionTarget.Rendering += OnRendering;
+            renderingAttached = true;
+        }
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
-        CompositionTarget.Rendering -= OnRendering;
+        if (renderingAttached)
+        {
+            CompositionTarget.Rendering -= OnRendering;
+            renderingAttached = false;
+        }
         animationClock.Stop();
+        draggedNode = null;
+        hoveredNode = null;
+        connectSourceNode = null;
+        isPanning = false;
+        isMinimapPanning = false;
         Detach(ViewModel);
     }
 
     private void OnRendering(object? sender, object e)
     {
-        if (ViewModel?.Nodes.Count > 0)
+        if (IsLoaded &&
+            Visibility == Visibility.Visible &&
+            canvas.IsLoaded &&
+            ViewModel?.Nodes.Count > 0)
         {
             InvalidateCanvas();
         }
@@ -606,6 +627,9 @@ public sealed class GraphCanvasControl : Grid
 
     private void InvalidateCanvas()
     {
-        canvas.Invalidate();
+        if (canvas.IsLoaded && canvas.ActualWidth > 0 && canvas.ActualHeight > 0)
+        {
+            canvas.Invalidate();
+        }
     }
 }

@@ -14,6 +14,58 @@ namespace Argus.Tests;
 public sealed class ArgusAiTests
 {
     [Fact]
+    public void CurrentProviderCatalogUsesPublishedContextAndReasoningLimits()
+    {
+        var openAi = Assert.Single(AiModelCatalog.OpenAiModels, model => model.Id == "gpt-5.5");
+        Assert.Equal(1_050_000, openAi.ContextWindowTokens);
+        Assert.Equal(128_000, openAi.MaxOutputTokens);
+        Assert.Equal(["none", "low", "medium", "high", "xhigh"], openAi.ReasoningEfforts);
+
+        var codex = Assert.Single(AiModelCatalog.CodexModels, model => model.Id == "gpt-5.5");
+        Assert.Equal(258_000, codex.ContextWindowTokens);
+        Assert.Equal(["low", "medium", "high", "xhigh"], codex.ReasoningEfforts);
+
+        var deepSeek = Assert.Single(AiModelCatalog.DeepSeekModels, model => model.Id == "deepseek-v4-pro");
+        Assert.Equal(1_000_000, deepSeek.ContextWindowTokens);
+        Assert.Equal(393_216, deepSeek.MaxOutputTokens);
+        Assert.Equal(["high", "max"], deepSeek.ReasoningEfforts);
+    }
+
+    [Fact]
+    public void ProjectOutboundPreviewOmitsPathsCredentialsAndSensitiveValues()
+    {
+        var context = new ProjectContext(
+            "Argus",
+            @"D:\Private\Argus",
+            @"D:\Private\Argus\README.md",
+            """
+            # Argus
+            A local-first workspace.
+            API_KEY=should-not-leave-device
+            """,
+            """
+            README: README.md
+            Git branch: main
+            GitHub remote: https://oauth2:private-token@github.com/Guts444/argus-agent.git
+            Working tree: has local changes
+            Changed files:  M .env,  M src/App.cs
+            """,
+            "main",
+            "https://oauth2:private-token@github.com/Guts444/argus-agent.git",
+            true);
+
+        var preview = ProjectContextPrivacy.BuildOutboundPreview(context);
+
+        Assert.DoesNotContain(@"D:\Private", preview, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("private-token", preview, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("should-not-leave-device", preview, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(".env", preview, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("github.com/Guts444/argus-agent.git", preview);
+        Assert.Contains("[sensitive value omitted]", preview);
+        Assert.Contains("[sensitive file omitted]", preview);
+    }
+
+    [Fact]
     public async Task LocalOpenAiCompatibleEndpointDoesNotRequireApiKey()
     {
         var handler = new CaptureHandler();
@@ -52,6 +104,128 @@ public sealed class ArgusAiTests
     }
 
     [Fact]
+    public async Task OpenAiCodexProfileDispatchesWithoutApiKey()
+    {
+        var handler = new CaptureHandler();
+        var codex = new FakeOpenAiCodexService();
+        var chat = new OpenAiCompatibleChatService(
+            new HttpClient(handler),
+            new EmptySecretStore(),
+            codex);
+        var profile = new AiProviderProfile
+        {
+            Name = "OpenAI Codex (ChatGPT)",
+            ProviderType = "OpenAICodex",
+            BaseUrl = "codex://app-server",
+            Model = "gpt-5.5",
+            ApiKeyStorageKey = string.Empty
+        };
+
+        var result = await chat.SendAsync(profile, [new AiChatTurn("user", "Hello")]);
+
+        Assert.Equal("codex response", result.Content);
+        Assert.Equal(1, codex.SendCount);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public async Task ProviderRouterRoutesCodexAndOpenAiCompatibleProfilesToTheirAdapters()
+    {
+        var handler = new CaptureHandler();
+        var codex = new FakeOpenAiCodexService();
+        var compatible = new OpenAiCompatibleChatService(
+            new HttpClient(handler),
+            new StaticSecretStore("sk-test"));
+        var router = new AiProviderRouter(
+        [
+            compatible,
+            new CodexProviderAdapter(codex)
+        ]);
+
+        var codexResult = await router.SendAsync(
+            new AiProviderProfile
+            {
+                Name = "OpenAI Codex (ChatGPT)",
+                ProviderType = "OpenAICodex",
+                BaseUrl = "codex://app-server",
+                Model = "gpt-5.5"
+            },
+            [new AiChatTurn("user", "Hello")]);
+
+        Assert.Equal("codex response", codexResult.Content);
+        Assert.Equal(1, codex.SendCount);
+        Assert.Null(handler.LastRequest);
+
+        var apiResult = await router.SendAsync(
+            new AiProviderProfile
+            {
+                Name = "OpenAI",
+                ProviderType = "OpenAI",
+                BaseUrl = "https://api.openai.com/v1",
+                Model = "gpt-5.5",
+                ApiKeyStorageKey = "openai"
+            },
+            [new AiChatTurn("user", "Hello")]);
+
+        Assert.Equal("local response", apiResult.Content);
+        Assert.NotNull(handler.LastRequest);
+    }
+
+    [Fact]
+    public void ProviderCapabilitiesAreExplicitAndProviderSpecific()
+    {
+        var compatible = new OpenAiCompatibleChatService(
+            new HttpClient(new CaptureHandler()),
+            new EmptySecretStore());
+
+        var deepSeek = compatible.GetCapabilities(new AiProviderProfile
+        {
+            ProviderType = "DeepSeek",
+            BaseUrl = "https://api.deepseek.com"
+        });
+        Assert.Equal(AiProviderKind.DeepSeek, deepSeek.Kind);
+        Assert.Equal(AiAuthenticationMode.ApiKey, deepSeek.AuthenticationMode);
+        Assert.True(deepSeek.SupportsThinkingToggle);
+        Assert.False(deepSeek.SupportsEmbeddings);
+
+        var local = compatible.GetCapabilities(new AiProviderProfile
+        {
+            ProviderType = "Local",
+            BaseUrl = "http://127.0.0.1:11434/v1"
+        });
+        Assert.Equal(AiProviderKind.Local, local.Kind);
+        Assert.Equal(AiAuthenticationMode.LocalOptional, local.AuthenticationMode);
+        Assert.True(local.SupportsEmbeddings);
+
+        var codex = new CodexProviderAdapter(new FakeOpenAiCodexService())
+            .GetCapabilities(new AiProviderProfile { ProviderType = "OpenAICodex" });
+        Assert.Equal(AiAuthenticationMode.CodexAccount, codex.AuthenticationMode);
+        Assert.True(codex.ReasoningAlwaysEnabled);
+        Assert.False(codex.SupportsThinkingToggle);
+        Assert.False(codex.SupportsEmbeddings);
+    }
+
+    [Fact]
+    public async Task ProviderAdapterDiscoversModelsForLocalOpenAiCompatibleEndpoint()
+    {
+        var adapter = new OpenAiCompatibleChatService(
+            new HttpClient(new ModelCatalogHandler()),
+            new EmptySecretStore());
+        var models = await adapter.ListModelsAsync(
+            new AiProviderProfile
+            {
+                Name = "Local",
+                ProviderType = "Local",
+                BaseUrl = "http://localhost:1234/v1",
+                Model = "old-model"
+            },
+            forceRefresh: true);
+
+        Assert.Contains(models, model => model.Id == "local-instruct");
+        Assert.Contains(models, model => model.Id == "local-reasoner");
+    }
+
+    [Fact]
     public async Task OpenAiProfileSendsBearerAndRoutingHeaders()
     {
         var handler = new CaptureHandler();
@@ -85,6 +259,29 @@ public sealed class ArgusAiTests
     }
 
     [Fact]
+    public async Task OpenAiReasoningEffortDoesNotDependOnLegacyThinkingToggle()
+    {
+        var handler = new CaptureHandler();
+        var chat = new OpenAiCompatibleChatService(new HttpClient(handler), new StaticSecretStore("sk-test"));
+        var profile = new AiProviderProfile
+        {
+            Name = "OpenAI",
+            ProviderType = "OpenAI",
+            BaseUrl = "https://api.openai.com/v1",
+            Model = "gpt-5.5",
+            ApiKeyStorageKey = "openai",
+            ThinkingMode = "disabled",
+            ReasoningEffort = "high"
+        };
+
+        var result = await chat.SendAsync(profile, [new AiChatTurn("user", "Hello")]);
+
+        Assert.Null(result.Error);
+        Assert.Contains("\"reasoning_effort\":\"high\"", handler.LastBody);
+        Assert.DoesNotContain("temperature", handler.LastBody);
+    }
+
+    [Fact]
     public async Task OpenRouterProfileSendsReasoningPayloadAndHeaders()
     {
         var handler = new CaptureHandler();
@@ -111,6 +308,84 @@ public sealed class ArgusAiTests
         Assert.Contains("\"reasoning\"", handler.LastBody);
         Assert.Contains("\"effort\":\"xhigh\"", handler.LastBody);
         Assert.DoesNotContain("temperature", handler.LastBody);
+    }
+
+    [Fact]
+    public async Task DeepSeekV4ProSendsThinkingMaxPayload()
+    {
+        var handler = new CaptureHandler();
+        var chat = new OpenAiCompatibleChatService(new HttpClient(handler), new StaticSecretStore("sk-ds-test"));
+        var profile = new AiProviderProfile
+        {
+            Name = "DeepSeek",
+            ProviderType = "DeepSeek",
+            BaseUrl = "https://api.deepseek.com",
+            Model = "deepseek-v4-pro",
+            ApiKeyStorageKey = "deepseek",
+            ThinkingMode = "enabled",
+            ReasoningEffort = "max"
+        };
+
+        var result = await chat.SendAsync(profile, [new AiChatTurn("user", "Hello")]);
+
+        Assert.Null(result.Error);
+        Assert.Contains("\"thinking\":{\"type\":\"enabled\"}", handler.LastBody);
+        Assert.Contains("\"reasoning_effort\":\"max\"", handler.LastBody);
+        Assert.DoesNotContain("temperature", handler.LastBody);
+    }
+
+    [Fact]
+    public async Task DeepSeekThinkingCanBeDisabledExplicitly()
+    {
+        var handler = new CaptureHandler();
+        var chat = new OpenAiCompatibleChatService(new HttpClient(handler), new StaticSecretStore("sk-ds-test"));
+        var profile = new AiProviderProfile
+        {
+            Name = "DeepSeek",
+            ProviderType = "DeepSeek",
+            BaseUrl = "https://api.deepseek.com",
+            Model = "deepseek-v4-pro",
+            ApiKeyStorageKey = "deepseek",
+            ThinkingMode = "disabled",
+            ReasoningEffort = "max"
+        };
+
+        var result = await chat.SendAsync(profile, [new AiChatTurn("user", "Hello")]);
+
+        Assert.Null(result.Error);
+        Assert.Contains("\"thinking\":{\"type\":\"disabled\"}", handler.LastBody);
+        Assert.DoesNotContain("reasoning_effort", handler.LastBody);
+        Assert.Contains("\"temperature\":0.4", handler.LastBody);
+    }
+
+    [Fact]
+    public async Task AnthropicProfileUsesMessagesFormatWithoutSamplingOverride()
+    {
+        var handler = new AnthropicCaptureHandler();
+        var chat = new OpenAiCompatibleChatService(new HttpClient(handler), new StaticSecretStore("sk-ant-test"));
+        var profile = new AiProviderProfile
+        {
+            Name = "Anthropic",
+            ProviderType = "Anthropic",
+            BaseUrl = "https://api.anthropic.com/v1",
+            Model = "claude-sonnet-4-6",
+            ApiKeyStorageKey = "anthropic"
+        };
+
+        var result = await chat.SendAsync(
+            profile,
+            [
+                new AiChatTurn("system", "Be concise."),
+                new AiChatTurn("user", "Hello")
+            ]);
+
+        Assert.Equal("anthropic response", result.Content);
+        Assert.Contains("\"system\":\"Be concise.\"", handler.LastBody);
+        Assert.Contains("\"role\":\"user\"", handler.LastBody);
+        Assert.DoesNotContain("\"role\":\"system\"", handler.LastBody);
+        Assert.DoesNotContain("temperature", handler.LastBody);
+        Assert.True(handler.LastRequest!.Headers.Contains("x-api-key"));
+        Assert.True(handler.LastRequest.Headers.Contains("anthropic-version"));
     }
 
     [Fact]
@@ -201,6 +476,52 @@ public sealed class ArgusAiTests
         }
     }
 
+    private sealed class ModelCatalogHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "data": [
+                        { "id": "local-instruct" },
+                        { "id": "local-reasoner" }
+                      ]
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            });
+        }
+    }
+
+    private sealed class AnthropicCaptureHandler : HttpMessageHandler
+    {
+        public HttpRequestMessage? LastRequest { get; private set; }
+        public string LastBody { get; private set; } = string.Empty;
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            LastRequest = request;
+            LastBody = request.Content is null
+                ? string.Empty
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"content":[{"type":"text","text":"anthropic response"}],"model":"claude-sonnet-4-6"}""",
+                    Encoding.UTF8,
+                    "application/json")
+            };
+        }
+    }
+
     [Fact]
     public async Task VectorMemoryRecallCalculatesCosineSimilarity()
     {
@@ -223,10 +544,39 @@ public sealed class ArgusAiTests
         await memoryService.SaveMemoryAsync("memory2", "test", 3);
 
         // Recall
-        var results = await memoryService.RecallAsync("query");
+        var results = await memoryService.RecallWithDetailsAsync("query");
 
         Assert.NotEmpty(results);
-        Assert.Equal("memory1", results[0].Text);
+        Assert.Equal("memory1", results[0].Memory.Text);
+        Assert.Equal(MemoryRecallMethod.Semantic, results[0].Method);
+        Assert.Equal(1, results[0].SemanticScore);
+        Assert.Contains("semantic similarity", results[0].Explanation);
+    }
+
+    [Fact]
+    public async Task MemorySaveAndRecallFallBackWhenEmbeddingProviderFails()
+    {
+        var services = new ServiceCollection();
+        var dbPath = Path.Combine(Path.GetTempPath(), "ArgusTests", $"{Guid.NewGuid():N}.db");
+        services.AddArgusData(dbPath);
+        using var provider = services.BuildServiceProvider();
+        await provider.GetRequiredService<ArgusDatabaseInitializer>().InitializeAsync();
+
+        var memoryService = new LocalMemoryService(
+            provider.GetRequiredService<IDbContextFactory<ArgusDbContext>>(),
+            new SimpleSettingsService(),
+            new FailingEmbeddingChatService());
+
+        var saved = await memoryService.SaveMemoryAsync(
+            "Embedding outages must not disable local memory.",
+            "test:fallback",
+            4);
+        var recalled = await memoryService.RecallWithDetailsAsync("local memory", 5);
+
+        Assert.Null(saved.EmbeddingJson);
+        Assert.Contains(recalled, result =>
+            result.Memory.Id == saved.Id &&
+            result.Method is MemoryRecallMethod.Keyword or MemoryRecallMethod.ExactPhrase);
     }
 
     [Fact]
@@ -239,18 +589,282 @@ public sealed class ArgusAiTests
 
         var mockChat = new MockAgentLoopChatService();
         var mockSettings = new SimpleSettingsService();
-        var toolService = new ToolService(graph, memories);
+        var toolService = new ToolService(
+            graph,
+            memories,
+            auditService: provider.GetRequiredService<IToolExecutionAuditService>());
 
-        var agent = new AgentService(graph, memories, toolService, mockSettings, mockChat);
+        var agent = new AgentService(
+            graph,
+            memories,
+            toolService,
+            mockSettings,
+            mockChat,
+            toolApprovalService: new AllowToolApprovalService());
 
         var log = await agent.RunAsync("Create a note for testing the agent");
 
         // Assertions
         Assert.Contains("- **Executing Action:** `CreateNode`", log);
+        Assert.Contains("- **Execution ID:** `", log);
         Assert.Contains("- **Decision:** Task completed.", log);
 
         var nodes = await graph.SearchNodesAsync("Agent Created Node");
         Assert.Contains(nodes, n => n.Title == "Agent Created Node");
+    }
+
+    [Fact]
+    public async Task AgentExecutionLoopDeniesMutationWithoutExecutingTool()
+    {
+        using var provider = CreateProvider();
+        await provider.GetRequiredService<ArgusDatabaseInitializer>().InitializeAsync();
+        var graph = provider.GetRequiredService<IGraphService>();
+        var memories = provider.GetRequiredService<IMemoryService>();
+        var toolService = new ToolService(
+            graph,
+            memories,
+            auditService: provider.GetRequiredService<IToolExecutionAuditService>());
+        var agent = new AgentService(
+            graph,
+            memories,
+            toolService,
+            new SimpleSettingsService(),
+            new MockAgentLoopChatService(),
+            toolApprovalService: new DenyToolApprovalService());
+
+        var (answer, log) = await agent.RunWithDetailsAsync("Create a note that must be approved");
+
+        Assert.Contains("did not execute `CreateNode`", answer);
+        Assert.Contains("**Approval:** Denied.", log);
+        Assert.DoesNotContain(await graph.SearchNodesAsync("Agent Created Node"), node => node.Title == "Agent Created Node");
+    }
+
+    [Fact]
+    public async Task AgentExecutionLoopFailsClosedWhenApprovalServiceIsMissing()
+    {
+        using var provider = CreateProvider();
+        await provider.GetRequiredService<ArgusDatabaseInitializer>().InitializeAsync();
+        var graph = provider.GetRequiredService<IGraphService>();
+        var memories = provider.GetRequiredService<IMemoryService>();
+        var agent = new AgentService(
+            graph,
+            memories,
+            new ToolService(
+                graph,
+                memories,
+                auditService: provider.GetRequiredService<IToolExecutionAuditService>()),
+            new SimpleSettingsService(),
+            new MockAgentLoopChatService());
+
+        var (answer, log) = await agent.RunWithDetailsAsync("Create a note without an approval surface");
+
+        Assert.Contains("no approval service is available", answer);
+        Assert.Contains("**Approval:** Denied.", log);
+        Assert.DoesNotContain(await graph.SearchNodesAsync("Agent Created Node"), node => node.Title == "Agent Created Node");
+    }
+
+    [Fact]
+    public async Task AgentConversationHistoryFiltersThinkingAndDoesNotDuplicateCurrentInstruction()
+    {
+        using var provider = CreateProvider();
+        await provider.GetRequiredService<ArgusDatabaseInitializer>().InitializeAsync();
+        var graph = provider.GetRequiredService<IGraphService>();
+        var memories = provider.GetRequiredService<IMemoryService>();
+        var conversations = provider.GetRequiredService<IConversationService>();
+        var conversation = await conversations.CreateConversationAsync("Agent history");
+        await conversations.AddMessageAsync(conversation.Id, "user", "Earlier question");
+        await conversations.AddMessageAsync(conversation.Id, "thinking", "Private execution trace");
+        await conversations.AddMessageAsync(conversation.Id, "assistant", "Earlier answer");
+        await conversations.AddMessageAsync(conversation.Id, "user", "Current instruction");
+
+        var chat = new CapturingTerminalChatService();
+        var agent = new AgentService(
+            graph,
+            memories,
+            new ToolService(
+                graph,
+                memories,
+                auditService: provider.GetRequiredService<IToolExecutionAuditService>()),
+            new SimpleSettingsService(),
+            chat,
+            conversationService: conversations);
+
+        await agent.RunWithDetailsAsync("Current instruction", conversation.Id);
+
+        var sent = Assert.Single(chat.Requests);
+        Assert.DoesNotContain(sent, turn => turn.Role == "thinking");
+        Assert.Equal(2, sent.Count(turn => turn.Role == "user"));
+        Assert.Equal(1, sent.Count(turn => turn.Role == "user" && turn.Content == "Current instruction"));
+        Assert.Equal(new[] { "system", "user", "assistant", "user" }, sent.Select(turn => turn.Role).ToArray());
+    }
+
+    [Fact]
+    public async Task AgentExecutionLoopStopsAtConfiguredStepLimit()
+    {
+        using var provider = CreateProvider();
+        await provider.GetRequiredService<ArgusDatabaseInitializer>().InitializeAsync();
+        var graph = provider.GetRequiredService<IGraphService>();
+        var memories = provider.GetRequiredService<IMemoryService>();
+        var chat = new EndlessReadOnlyToolChatService();
+        var agent = new AgentService(
+            graph,
+            memories,
+            new ToolService(
+                graph,
+                memories,
+                auditService: provider.GetRequiredService<IToolExecutionAuditService>()),
+            new SimpleSettingsService(),
+            chat);
+
+        var (answer, log) = await agent.RunWithDetailsAsync("Keep searching forever");
+
+        Assert.Equal(8, chat.CallCount);
+        Assert.Contains("stopped after 8 tool steps", answer);
+        Assert.Contains("#### Step 8", log);
+        Assert.Contains("Reached the 8-step execution limit", log);
+        Assert.DoesNotContain("#### Step 9", log);
+    }
+
+    [Fact]
+    public async Task ToolServiceClassifiesMutationRisk()
+    {
+        using var provider = CreateProvider();
+        await provider.GetRequiredService<ArgusDatabaseInitializer>().InitializeAsync();
+        var tools = new ToolService(
+            provider.GetRequiredService<IGraphService>(),
+            provider.GetRequiredService<IMemoryService>());
+
+        Assert.Equal(ToolRiskLevel.ReadOnly, tools.GetToolDefinition("SearchGraph")?.RiskLevel);
+        Assert.Equal(ToolRiskLevel.Mutating, tools.GetToolDefinition("CreateNode")?.RiskLevel);
+        Assert.Equal(ToolRiskLevel.Destructive, tools.GetToolDefinition("DeleteNode")?.RiskLevel);
+        Assert.Contains(
+            "\"additionalProperties\":false",
+            tools.GetToolDefinition("CreateNode")?.ArgumentSchemaJson);
+        Assert.Null(tools.GetToolDefinition("NotARealTool"));
+    }
+
+    [Fact]
+    public async Task ToolArgumentsRejectUnknownMissingAndOutOfRangeValues()
+    {
+        using var provider = CreateProvider();
+        await provider.GetRequiredService<ArgusDatabaseInitializer>().InitializeAsync();
+        var tools = new ToolService(
+            provider.GetRequiredService<IGraphService>(),
+            provider.GetRequiredService<IMemoryService>());
+
+        var validation = tools.ValidateArguments(
+            "CreateNode",
+            """{"title":"","importance":9,"unexpected":true}""");
+
+        Assert.False(validation.IsValid);
+        Assert.Contains(validation.Errors, error => error.Contains("'title' is required", StringComparison.Ordinal));
+        Assert.Contains(validation.Errors, error => error.Contains("Unknown property 'unexpected'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ToolServiceFailsClosedForMutationWithoutApprovedStatus()
+    {
+        using var provider = CreateProvider();
+        await provider.GetRequiredService<ArgusDatabaseInitializer>().InitializeAsync();
+        var graph = provider.GetRequiredService<IGraphService>();
+        var tools = new ToolService(
+            graph,
+            provider.GetRequiredService<IMemoryService>(),
+            auditService: provider.GetRequiredService<IToolExecutionAuditService>());
+
+        var result = await tools.ExecuteToolAsync(
+            "CreateNode",
+            """{"title":"Must Not Exist","type":"Note"}""");
+
+        Assert.Contains("requires explicit approval", result);
+        Assert.DoesNotContain(
+            await graph.SearchNodesAsync("Must Not Exist"),
+            node => node.Title == "Must Not Exist");
+
+        var audit = Assert.Single(
+            await provider.GetRequiredService<IToolExecutionAuditService>().GetRecentAsync());
+        Assert.Equal("approval_denied", audit.Outcome);
+        Assert.Equal("unspecified", audit.ApprovalStatus);
+    }
+
+    [Fact]
+    public async Task ToolServiceFailsClosedForApprovedMutationWithoutAuditStore()
+    {
+        using var provider = CreateProvider();
+        await provider.GetRequiredService<ArgusDatabaseInitializer>().InitializeAsync();
+        var graph = provider.GetRequiredService<IGraphService>();
+        var tools = new ToolService(
+            graph,
+            provider.GetRequiredService<IMemoryService>());
+
+        var result = await tools.ExecuteToolAsync(
+            new ToolExecutionRequest(
+                "CreateNode",
+                """{"title":"Unaudited Node","type":"Note"}""",
+                ApprovalStatus: "approved"));
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("audit store is unavailable", result.ResultJson);
+        Assert.DoesNotContain(
+            await graph.SearchNodesAsync("Unaudited Node"),
+            node => node.Title == "Unaudited Node");
+    }
+
+    [Fact]
+    public async Task ApprovedToolExecutionPersistsRedactedAttributableAudit()
+    {
+        using var provider = CreateProvider();
+        await provider.GetRequiredService<ArgusDatabaseInitializer>().InitializeAsync();
+        var auditService = provider.GetRequiredService<IToolExecutionAuditService>();
+        var tools = new ToolService(
+            provider.GetRequiredService<IGraphService>(),
+            provider.GetRequiredService<IMemoryService>(),
+            auditService: auditService);
+        var agentRunId = Guid.NewGuid();
+        var conversationId = Guid.NewGuid();
+
+        var result = await tools.ExecuteToolAsync(
+            new ToolExecutionRequest(
+                "CreateNode",
+                """{"title":"Private roadmap title","type":"Decision","summary":"Secret launch details","importance":5}""",
+                agentRunId,
+                conversationId,
+                ApprovalStatus: "approved"));
+
+        Assert.True(result.Succeeded);
+        var audit = Assert.Single(await auditService.GetRecentAsync());
+        Assert.Equal(result.ExecutionId, audit.ExecutionId);
+        Assert.Equal(agentRunId, audit.AgentRunId);
+        Assert.Equal(conversationId, audit.ConversationId);
+        Assert.Equal("approved", audit.ApprovalStatus);
+        Assert.Equal("succeeded", audit.Outcome);
+        Assert.DoesNotContain("Private roadmap title", audit.ArgumentsSummary);
+        Assert.DoesNotContain("Secret launch details", audit.ArgumentsSummary);
+        Assert.Contains("[redacted:", audit.ArgumentsSummary);
+    }
+
+    [Fact]
+    public async Task InvalidToolAttemptIsAuditedWithoutExecution()
+    {
+        using var provider = CreateProvider();
+        await provider.GetRequiredService<ArgusDatabaseInitializer>().InitializeAsync();
+        var auditService = provider.GetRequiredService<IToolExecutionAuditService>();
+        var tools = new ToolService(
+            provider.GetRequiredService<IGraphService>(),
+            provider.GetRequiredService<IMemoryService>(),
+            auditService: auditService);
+
+        var result = await tools.ExecuteToolAsync(
+            new ToolExecutionRequest(
+                "SaveMemory",
+                """{"text":"","importance":0,"extra":"nope"}""",
+                ApprovalStatus: "validation_rejected"));
+
+        Assert.True(result.ValidationFailed);
+        Assert.False(result.Succeeded);
+        var audit = Assert.Single(await auditService.GetRecentAsync());
+        Assert.Equal("validation_failed", audit.Outcome);
+        Assert.Equal(result.ExecutionId, audit.ExecutionId);
     }
 
     [Fact]
@@ -297,6 +911,25 @@ public sealed class ArgusAiTests
                 return Task.FromResult<float[]?>(new[] { 0.0f, 1.0f });
             }
             return Task.FromResult<float[]?>(null);
+        }
+    }
+
+    private sealed class FailingEmbeddingChatService : IAiChatService
+    {
+        public Task<AiChatResult> SendAsync(
+            AiProviderProfile? profile,
+            IReadOnlyList<AiChatTurn> messages,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new AiChatResult("unused"));
+        }
+
+        public Task<float[]?> GenerateEmbeddingAsync(
+            AiProviderProfile? profile,
+            string text,
+            CancellationToken cancellationToken = default)
+        {
+            throw new HttpRequestException("Embedding endpoint unavailable.");
         }
     }
 
@@ -380,6 +1013,86 @@ public sealed class ArgusAiTests
         }
     }
 
+    private sealed class CapturingTerminalChatService : IAiChatService
+    {
+        public List<IReadOnlyList<AiChatTurn>> Requests { get; } = new();
+
+        public Task<AiChatResult> SendAsync(
+            AiProviderProfile? profile,
+            IReadOnlyList<AiChatTurn> messages,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add(messages.ToList());
+            return Task.FromResult(new AiChatResult(
+                """
+                {
+                  "thought": "The task is complete.",
+                  "tool": null,
+                  "arguments": null,
+                  "answer": "Done."
+                }
+                """));
+        }
+
+        public Task<float[]?> GenerateEmbeddingAsync(
+            AiProviderProfile? profile,
+            string text,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<float[]?>(null);
+        }
+    }
+
+    private sealed class EndlessReadOnlyToolChatService : IAiChatService
+    {
+        public int CallCount { get; private set; }
+
+        public Task<AiChatResult> SendAsync(
+            AiProviderProfile? profile,
+            IReadOnlyList<AiChatTurn> messages,
+            CancellationToken cancellationToken = default)
+        {
+            CallCount++;
+            return Task.FromResult(new AiChatResult(
+                """
+                {
+                  "thought": "Search again.",
+                  "tool": "SearchGraph",
+                  "arguments": { "query": "Argus" },
+                  "answer": null
+                }
+                """));
+        }
+
+        public Task<float[]?> GenerateEmbeddingAsync(
+            AiProviderProfile? profile,
+            string text,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<float[]?>(null);
+        }
+    }
+
+    private sealed class AllowToolApprovalService : IToolApprovalService
+    {
+        public Task<ToolApprovalDecision> RequestApprovalAsync(
+            ToolApprovalRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new ToolApprovalDecision(true));
+        }
+    }
+
+    private sealed class DenyToolApprovalService : IToolApprovalService
+    {
+        public Task<ToolApprovalDecision> RequestApprovalAsync(
+            ToolApprovalRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new ToolApprovalDecision(false, "the test user denied the action"));
+        }
+    }
+
     private sealed class FeedHandler : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -440,8 +1153,17 @@ public sealed class ArgusAiTests
 
         var graph = provider.GetRequiredService<IGraphService>();
         var memories = provider.GetRequiredService<IMemoryService>();
-        var toolService = new ToolService(graph, memories);
-        var agent = new AgentService(graph, memories, toolService, mockSettings, mockChat);
+        var toolService = new ToolService(
+            graph,
+            memories,
+            auditService: provider.GetRequiredService<IToolExecutionAuditService>());
+        var agent = new AgentService(
+            graph,
+            memories,
+            toolService,
+            mockSettings,
+            mockChat,
+            toolApprovalService: new AllowToolApprovalService());
 
         var handler = new MockTelegramHttpMessageHandler();
         var httpClient = new HttpClient(handler);
@@ -476,8 +1198,17 @@ public sealed class ArgusAiTests
 
         var graph = provider.GetRequiredService<IGraphService>();
         var memories = provider.GetRequiredService<IMemoryService>();
-        var toolService = new ToolService(graph, memories);
-        var agent = new AgentService(graph, memories, toolService, mockSettings, mockChat);
+        var toolService = new ToolService(
+            graph,
+            memories,
+            auditService: provider.GetRequiredService<IToolExecutionAuditService>());
+        var agent = new AgentService(
+            graph,
+            memories,
+            toolService,
+            mockSettings,
+            mockChat,
+            toolApprovalService: new AllowToolApprovalService());
 
         var handler = new MockTelegramBlockedUserHttpMessageHandler();
         var httpClient = new HttpClient(handler);
@@ -511,8 +1242,17 @@ public sealed class ArgusAiTests
 
         var graph = provider.GetRequiredService<IGraphService>();
         var memories = provider.GetRequiredService<IMemoryService>();
-        var toolService = new ToolService(graph, memories);
-        var agent = new AgentService(graph, memories, toolService, mockSettings, mockChat);
+        var toolService = new ToolService(
+            graph,
+            memories,
+            auditService: provider.GetRequiredService<IToolExecutionAuditService>());
+        var agent = new AgentService(
+            graph,
+            memories,
+            toolService,
+            mockSettings,
+            mockChat,
+            toolApprovalService: new AllowToolApprovalService());
 
         var handler = new MockTelegramHttpMessageHandler();
         var httpClient = new HttpClient(handler);
@@ -547,8 +1287,17 @@ public sealed class ArgusAiTests
 
         var graph = provider.GetRequiredService<IGraphService>();
         var memories = provider.GetRequiredService<IMemoryService>();
-        var toolService = new ToolService(graph, memories);
-        var agent = new AgentService(graph, memories, toolService, mockSettings, mockChat);
+        var toolService = new ToolService(
+            graph,
+            memories,
+            auditService: provider.GetRequiredService<IToolExecutionAuditService>());
+        var agent = new AgentService(
+            graph,
+            memories,
+            toolService,
+            mockSettings,
+            mockChat,
+            toolApprovalService: new AllowToolApprovalService());
 
         var handler = new MockTelegramHttpMessageHandler();
         var httpClient = new HttpClient(handler);
@@ -762,6 +1511,27 @@ public sealed class ArgusAiTests
     }
 
     [Fact]
+    public async Task StockServiceDoesNotFabricateQuoteWhenProviderFails()
+    {
+        using var client = new HttpClient(new FailedStockQuoteHttpMessageHandler());
+        var stocks = new StockService(client);
+
+        var quote = await stocks.GetQuoteAsync("MSFT");
+
+        Assert.Null(quote);
+    }
+
+    private sealed class FailedStockQuoteHttpMessageHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+        }
+    }
+
+    [Fact]
     public async Task WebSearchToolQueriesSearxng()
     {
         using var provider = CreateProvider();
@@ -779,6 +1549,29 @@ public sealed class ArgusAiTests
         Assert.Contains("success", resultJson);
         Assert.Contains("Argus title", resultJson);
         Assert.Contains("Argus snippet", resultJson);
+    }
+
+    [Fact]
+    public async Task MemorySearchToolReturnsRecallEvidence()
+    {
+        using var provider = CreateProvider();
+        await provider.GetRequiredService<ArgusDatabaseInitializer>().InitializeAsync();
+        var graph = provider.GetRequiredService<IGraphService>();
+        var memories = provider.GetRequiredService<IMemoryService>();
+        await memories.SaveMemoryAsync(
+            "Argus keeps durable memory in local SQLite storage.",
+            "decision:memory",
+            5);
+        var toolService = new ToolService(graph, memories);
+
+        var resultJson = await toolService.ExecuteToolAsync(
+            "SearchMemories",
+            """{"query":"local SQLite storage","take":5}""");
+
+        Assert.Contains("\"Score\"", resultJson);
+        Assert.Contains("\"Method\"", resultJson);
+        Assert.Contains("\"Explanation\"", resultJson);
+        Assert.Contains("decision:memory", resultJson);
     }
 
     private sealed class MockSearxngHttpMessageHandler : HttpMessageHandler
@@ -801,6 +1594,38 @@ public sealed class ArgusAiTests
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json")
             });
+        }
+    }
+
+    private sealed class FakeOpenAiCodexService : IOpenAiCodexService
+    {
+        public int SendCount { get; private set; }
+
+        public Task<OpenAiCodexAccount> GetAccountAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new OpenAiCodexAccount(true, true, "Signed in."));
+
+        public Task<OpenAiCodexLoginStart> StartLoginAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new OpenAiCodexLoginStart(true, "Started.", "login", "https://example.com"));
+
+        public Task<OpenAiCodexAccount> CompleteLoginAsync(
+            string loginId,
+            TimeSpan timeout,
+            CancellationToken cancellationToken = default) =>
+            GetAccountAsync(cancellationToken);
+
+        public Task LogoutAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<IReadOnlyList<AiModelMetadata>> ListModelsAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<AiModelMetadata>>(
+                [new AiModelMetadata("gpt-5.5", "GPT-5.5")]);
+
+        public Task<AiChatResult> SendAsync(
+            AiProviderProfile profile,
+            IReadOnlyList<AiChatTurn> messages,
+            CancellationToken cancellationToken = default)
+        {
+            SendCount++;
+            return Task.FromResult(new AiChatResult("codex response", Model: profile.Model));
         }
     }
 
@@ -853,5 +1678,150 @@ public sealed class ArgusAiTests
             ToolService.OnToolExecuting -= onExecuting;
             ToolService.OnToolExecuted -= onExecuted;
         }
+    }
+
+    [Fact]
+    public async Task ToolExecutionAuditsFilteringAndPruningWorksCorrectly()
+    {
+        using var provider = CreateProvider();
+        await provider.GetRequiredService<ArgusDatabaseInitializer>().InitializeAsync();
+        var auditService = provider.GetRequiredService<IToolExecutionAuditService>();
+
+        var conversationId = Guid.NewGuid();
+        var audit1 = new ToolExecutionAudit
+        {
+            ExecutionId = Guid.NewGuid(),
+            ToolName = "CreateNode",
+            RiskLevel = "Mutating",
+            ApprovalStatus = "approved",
+            Outcome = "succeeded",
+            StartedAt = DateTimeOffset.UtcNow.AddDays(-5)
+        };
+        var audit2 = new ToolExecutionAudit
+        {
+            ExecutionId = Guid.NewGuid(),
+            ToolName = "SaveMemory",
+            RiskLevel = "Mutating",
+            ApprovalStatus = "auto_approved",
+            Outcome = "failed",
+            StartedAt = DateTimeOffset.UtcNow.AddDays(-2)
+        };
+        var audit3 = new ToolExecutionAudit
+        {
+            ExecutionId = Guid.NewGuid(),
+            ToolName = "WebSearch",
+            RiskLevel = "ReadOnly",
+            ApprovalStatus = "unknown",
+            Outcome = "started",
+            StartedAt = DateTimeOffset.UtcNow
+        };
+
+        await auditService.RecordAsync(audit1);
+        await auditService.RecordAsync(audit2);
+        await auditService.RecordAsync(audit3);
+
+        // Filter by tool name
+        var filteredByName = await auditService.GetFilteredAsync(toolName: "Save");
+        Assert.Single(filteredByName);
+        Assert.Equal(audit2.ExecutionId, filteredByName[0].ExecutionId);
+
+        // Filter by risk
+        var filteredByRisk = await auditService.GetFilteredAsync(riskLevel: "ReadOnly");
+        Assert.Single(filteredByRisk);
+        Assert.Equal(audit3.ExecutionId, filteredByRisk[0].ExecutionId);
+
+        // Filter by outcome
+        var filteredByOutcome = await auditService.GetFilteredAsync(outcome: "failed");
+        Assert.Single(filteredByOutcome);
+
+        // Filter by incomplete
+        var filteredByIncomplete = await auditService.GetFilteredAsync(onlyIncomplete: true);
+        Assert.Single(filteredByIncomplete);
+        Assert.Equal(audit3.ExecutionId, filteredByIncomplete[0].ExecutionId);
+
+        // Fetch by ExecutionId
+        var fetched = await auditService.GetByExecutionIdAsync(audit1.ExecutionId);
+        Assert.NotNull(fetched);
+        Assert.Equal("CreateNode", fetched.ToolName);
+
+        // Prune older than 3 days (should prune audit1)
+        var pruned = await auditService.PruneOldAuditsAsync(DateTimeOffset.UtcNow.AddDays(-3));
+        Assert.Equal(1, pruned);
+        
+        var recent = await auditService.GetRecentAsync();
+        Assert.Equal(2, recent.Count);
+        Assert.DoesNotContain(recent, a => a.ExecutionId == audit1.ExecutionId);
+
+        // Clear all
+        var cleared = await auditService.ClearAllAuditsAsync();
+        Assert.Equal(2, cleared);
+        Assert.Empty(await auditService.GetRecentAsync());
+    }
+
+    [Fact]
+    public async Task ToolExecutionIdempotencyPolicyPreventsDuplicateSuccessAndAllowsRetryOnFailure()
+    {
+        using var provider = CreateProvider();
+        await provider.GetRequiredService<ArgusDatabaseInitializer>().InitializeAsync();
+        var auditService = provider.GetRequiredService<IToolExecutionAuditService>();
+        var graph = provider.GetRequiredService<IGraphService>();
+        var memories = provider.GetRequiredService<IMemoryService>();
+
+        var tools = new ToolService(graph, memories, auditService: auditService);
+
+        var executionId = Guid.NewGuid();
+        var request = new ToolExecutionRequest(
+            "CreateNode",
+            "{\"title\":\"Unique Node X\",\"type\":\"Idea\",\"summary\":\"X details\"}",
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            ApprovalStatus: "approved",
+            ExecutionId: executionId);
+
+        // First execution: should succeed and create node
+        var result1 = await tools.ExecuteToolAsync(request);
+        Assert.True(result1.Succeeded);
+        Assert.DoesNotContain("idempotent_success", result1.ResultJson);
+
+        // Verify node was created
+        var nodesBefore = await graph.SearchNodesAsync("Unique Node X");
+        Assert.Single(nodesBefore);
+
+        // Second execution (same ExecutionId): should skip and return cached idempotent response
+        var result2 = await tools.ExecuteToolAsync(request);
+        Assert.True(result2.Succeeded);
+        Assert.Contains("idempotent_success", result2.ResultJson);
+
+        // Verify no duplicate node was created (still only one node exists)
+        var nodesAfter = await graph.SearchNodesAsync("Unique Node X");
+        Assert.Single(nodesAfter);
+
+        // Third execution (different ExecutionId): should allow execution again and create second node
+        var request2 = request with { ExecutionId = Guid.NewGuid() };
+        var result3 = await tools.ExecuteToolAsync(request2);
+        Assert.True(result3.Succeeded);
+        Assert.DoesNotContain("idempotent_success", result3.ResultJson);
+
+        // Setup a failed audit for a retry test
+        var failedExecutionId = Guid.NewGuid();
+        var failedAudit = new ToolExecutionAudit
+        {
+            ExecutionId = failedExecutionId,
+            ToolName = "CreateNode",
+            RiskLevel = "Mutating",
+            ApprovalStatus = "approved",
+            Outcome = "failed",
+            StartedAt = DateTimeOffset.UtcNow
+        };
+        await auditService.RecordAsync(failedAudit);
+
+        // Try execution with the failed ExecutionId: should execute (retry allowed)
+        var request3 = request with { ExecutionId = failedExecutionId, ArgumentsJson = "{\"title\":\"Retry Node\",\"type\":\"Idea\",\"summary\":\"y\"}" };
+        var result4 = await tools.ExecuteToolAsync(request3);
+        Assert.True(result4.Succeeded);
+        Assert.DoesNotContain("idempotent_success", result4.ResultJson);
+
+        var nodesRetry = await graph.SearchNodesAsync("Retry Node");
+        Assert.Single(nodesRetry);
     }
 }

@@ -31,7 +31,7 @@ public class StockService : IStockService
             using var response = await _http.SendAsync(request, ct);
             if (!response.IsSuccessStatusCode)
             {
-                return GetMockQuote(normalized);
+                return null;
             }
 
             await using var stream = await response.Content.ReadAsStreamAsync(ct);
@@ -44,14 +44,18 @@ public class StockService : IStockService
 
             if (result.ValueKind == JsonValueKind.Undefined)
             {
-                return GetMockQuote(normalized);
+                return null;
             }
 
-            return MapYahooChart(normalized, result) ?? GetMockQuote(normalized);
+            return MapYahooChart(normalized, result);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch
         {
-            return GetMockQuote(normalized);
+            return null;
         }
     }
 
@@ -207,23 +211,4 @@ public class StockService : IStockService
         return DateTimeOffset.FromUnixTimeSeconds(seconds).UtcDateTime;
     }
 
-    private static StockQuote GetMockQuote(string symbol)
-    {
-        var rng = new Random(symbol.GetHashCode());
-        var price = 100m + (decimal)(rng.NextDouble() * 400);
-        var change = (decimal)((rng.NextDouble() - 0.5) * 10);
-        return new StockQuote
-        {
-            Symbol = symbol.ToUpper(),
-            CompanyName = symbol.ToUpper(),
-            CurrentPrice = Math.Round(price, 2),
-            Change = Math.Round(change, 2),
-            ChangePercent = Math.Round(change / price * 100, 2),
-            HighDay = Math.Round(price + Math.Abs(change), 2),
-            LowDay = Math.Round(price - Math.Abs(change), 2),
-            OpenDay = Math.Round(price - change / 2, 2),
-            PreviousClose = Math.Round(price - change, 2),
-            Timestamp = DateTime.UtcNow
-        };
-    }
 }

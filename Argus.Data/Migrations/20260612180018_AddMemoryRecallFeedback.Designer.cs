@@ -3,6 +3,7 @@ using System;
 using Argus.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Argus.Data.Migrations
 {
     [DbContext(typeof(ArgusDbContext))]
-    partial class ArgusDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260612180018_AddMemoryRecallFeedback")]
+    partial class AddMemoryRecallFeedback
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.8");
@@ -364,76 +367,6 @@ namespace Argus.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("Tags", (string)null);
-                });
-
-            modelBuilder.Entity("Argus.Core.Models.ToolExecutionAudit", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid?>("AgentRunId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ApprovalStatus")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ArgumentsSummary")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<long>("CompletedAt")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<Guid?>("ConversationId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<long>("DurationMilliseconds")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("Error")
-                        .HasMaxLength(1000)
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid>("ExecutionId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Outcome")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ResultSummary")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("RiskLevel")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("TEXT");
-
-                    b.Property<long>("StartedAt")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("ToolName")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("AgentRunId");
-
-                    b.HasIndex("ConversationId");
-
-                    b.HasIndex("ExecutionId")
-                        .IsUnique();
-
-                    b.HasIndex("StartedAt");
-
-                    b.ToTable("ToolExecutionAudits", (string)null);
                 });
 
             modelBuilder.Entity("Argus.Core.Models.Edge", b =>

@@ -12,8 +12,14 @@ public class AgentService(
     ISettingsService? settingsService = null,
     IAiChatService? aiChatService = null,
     ISoulService? soulService = null,
-    IConversationService? conversationService = null) : IAgentService
+    IConversationService? conversationService = null,
+    IToolApprovalService? toolApprovalService = null) : IAgentService
 {
+    private const int MaxAgentSteps = 8;
+    private const int MaxConversationTurns = 40;
+    private const int MaxLogValueLength = 240;
+    private const int MaxLogResultLength = 2000;
+
     public async Task<string> RunAsync(string instruction, CancellationToken cancellationToken = default)
     {
         var (_, log) = await RunWithDetailsAsync(instruction, null, cancellationToken);
@@ -51,6 +57,14 @@ public class AgentService(
 
         var profile = await settingsService.GetDefaultAiProviderProfileAsync(cancellationToken);
         var soulText = soulService is not null ? await soulService.ReadSoulAsync(cancellationToken) : "You are the Argus Agent.";
+        var availableToolNames = await toolService.ListToolsAsync(cancellationToken);
+        var availableTools = string.Join(
+            Environment.NewLine,
+            availableToolNames
+                .Select(toolService.GetToolDefinition)
+                .Where(definition => definition is not null)
+                .Select((definition, index) =>
+                    $"{index + 1}. `{definition!.Name}` ({definition.RiskLevel}) - {definition.Description} Arguments schema: {definition.ArgumentSchemaJson}"));
 
         var systemPrompt =
             $$"""
@@ -58,15 +72,7 @@ public class AgentService(
 
             You are the Argus Agent, working in a Windows-native personal knowledge graph app.
             You have access to the following tools to inspect and modify the graph and memories:
-            1. `SearchGraph` (arguments: { "query": "text" }) - searches for graph nodes.
-            2. `SearchMemories` (arguments: { "query": "text", "take": 10 }) - searches for local memories.
-            3. `CreateNode` (arguments: { "title": "title", "type": "Project|Idea|Task|Decision|Note|Person|File|Link|Conversation|Memory|Tool|Agent", "summary": "brief summary", "body": "longer markdown body", "status": "Active|Completed|Archived", "importance": 1-5, "colorKey": "cyan|magenta|violet|blue|green|yellow|amber|orange|rose|pink", "iconKey": "project|idea|task|decision|note|person|file|link|conversation|memory|tool|agent" }) - creates a new node.
-            4. `UpdateNode` (arguments: { "nodeId": "UUID", "title": "title", "type": "type", "summary": "summary", "body": "body", "status": "status", "importance": 1-5, "colorKey": "color" }) - updates an existing node.
-            5. `DeleteNode` (arguments: { "nodeId": "UUID" }) - deletes a node.
-            6. `CreateEdge` (arguments: { "sourceNodeId": "UUID", "targetNodeId": "UUID", "relationshipType": "related_to|depends_on|inspired_by|belongs_to|blocked_by|uses|created_from|discussed_in|decided_in|reminds_me_of", "strength": 0.1-1.0 }) - connects two nodes.
-            7. `DeleteEdge` (arguments: { "edgeId": "UUID" }) - deletes an edge.
-            8. `SaveMemory` (arguments: { "text": "text", "source": "agent", "importance": 1-5, "linkedNodeId": "UUID|null" }) - saves a fact/note as local memory.
-            9. `WebSearch` (arguments: { "query": "text" }) - searches the web using local SearXNG.
+            {{availableTools}}
 
             At each step, output a JSON response matching the following schema:
             {
@@ -78,6 +84,7 @@ public class AgentService(
 
             If you are done, set "tool" to null, "arguments" to null, and put the message the user should see in "answer".
             Never put the execution log in "answer".
+            Mutating and destructive tools require explicit user approval. Never claim an action succeeded until its tool result confirms success.
             Only output valid JSON. Do not wrap in markdown codeblocks. Do not include extra text outside the JSON.
             """;
 
@@ -87,24 +94,32 @@ public class AgentService(
         if (conversationId.HasValue && conversationService is not null)
         {
             var dbMessages = await conversationService.GetMessagesAsync(conversationId.Value, cancellationToken);
-            foreach (var msg in dbMessages)
+            var conversationTurns = dbMessages
+                .Where(message => IsProviderConversationRole(message.Role))
+                .TakeLast(MaxConversationTurns)
+                .ToList();
+
+            foreach (var msg in conversationTurns)
             {
                 messages.Add(new AiChatTurn(msg.Role, msg.Content));
             }
         }
 
-        messages.Add(new AiChatTurn("user", $"Instruction: {instruction}"));
+        if (!IsCurrentInstructionAlreadyPresent(messages, instruction))
+        {
+            messages.Add(new AiChatTurn("user", instruction));
+        }
 
         var logs = new StringBuilder();
         logs.AppendLine($"### Argus Agent Execution Log");
         logs.AppendLine($"**Instruction:** {instruction}");
         logs.AppendLine();
 
-        const int maxSteps = 8;
         string finalAnswer = string.Empty;
         var toolResults = new List<string>();
+        var agentRunId = Guid.NewGuid();
 
-        for (int step = 1; step <= maxSteps; step++)
+        for (int step = 1; step <= MaxAgentSteps; step++)
         {
             logs.AppendLine($"#### Step {step}");
             var result = await aiChatService.SendAsync(profile, messages, cancellationToken);
@@ -156,24 +171,143 @@ public class AgentService(
                 ? "{}"
                 : arguments.GetRawText();
 
-            logs.AppendLine($"- **Executing Action:** `{toolName}`");
-            logs.AppendLine($"- **Arguments:** `{argsJson}`");
+            var definition = toolService.GetToolDefinition(toolName);
+            if (definition is null)
+            {
+                var unknownExecution = await toolService.ExecuteToolAsync(
+                    new ToolExecutionRequest(
+                        toolName,
+                        argsJson,
+                        agentRunId,
+                        conversationId,
+                        ApprovalStatus: "rejected"),
+                    cancellationToken);
+                var unknownToolResult = unknownExecution.ResultJson;
+                logs.AppendLine($"- **Error:** Unknown tool `{toolName}`.");
+                logs.AppendLine($"- **Execution ID:** `{unknownExecution.ExecutionId}`");
+                toolResults.Add($"{toolName}: {unknownToolResult}");
+                messages.Add(new AiChatTurn("assistant", result.Content));
+                messages.Add(new AiChatTurn("user", $"Tool `{toolName}` was rejected. Result: {unknownToolResult}"));
+                logs.AppendLine();
+                continue;
+            }
 
-            var toolResult = await toolService.ExecuteToolAsync(toolName, argsJson, cancellationToken);
-            toolResults.Add($"{toolName}: {toolResult}");
-            logs.AppendLine($"- **Result:** {toolResult}");
+            logs.AppendLine($"- **Proposed Action:** `{toolName}` ({definition.RiskLevel})");
+            var validation = toolService.ValidateArguments(definition.Name, argsJson);
+            if (!validation.IsValid)
+            {
+                var rejected = await toolService.ExecuteToolAsync(
+                    new ToolExecutionRequest(
+                        definition.Name,
+                        argsJson,
+                        agentRunId,
+                        conversationId,
+                        ApprovalStatus: "validation_rejected"),
+                    cancellationToken);
+                logs.AppendLine(
+                    $"- **Validation:** Rejected. {string.Join(" ", validation.Errors)}");
+                logs.AppendLine($"- **Execution ID:** `{rejected.ExecutionId}`");
+                logs.AppendLine(
+                    $"- **Result:** {TruncateForLog(SanitizeJsonForLog(rejected.ResultJson), MaxLogResultLength)}");
+                logs.AppendLine();
+                toolResults.Add($"{definition.Name}: {rejected.ResultJson}");
+                messages.Add(new AiChatTurn("assistant", result.Content));
+                messages.Add(new AiChatTurn(
+                    "user",
+                    $"Tool `{definition.Name}` was rejected before execution. Result: {rejected.ResultJson}"));
+                continue;
+            }
+
+            argsJson = validation.NormalizedArgumentsJson;
+            logs.AppendLine($"- **Arguments:** `{SanitizeJsonForLog(argsJson)}`");
+
+            var approvalStatus = "not_required";
+            if (definition.RiskLevel != ToolRiskLevel.ReadOnly)
+            {
+                var approval = await RequestToolApprovalAsync(definition, argsJson, cancellationToken);
+                if (!approval.Approved)
+                {
+                    var reason = string.IsNullOrWhiteSpace(approval.Reason)
+                        ? "Approval was denied."
+                        : approval.Reason.Trim();
+                    logs.AppendLine($"- **Approval:** Denied. {reason}");
+                    var denied = await toolService.ExecuteToolAsync(
+                        new ToolExecutionRequest(
+                            definition.Name,
+                            argsJson,
+                            agentRunId,
+                            conversationId,
+                            ApprovalStatus: "denied"),
+                        cancellationToken);
+                    logs.AppendLine($"- **Execution ID:** `{denied.ExecutionId}`");
+                    finalAnswer = $"I did not execute `{toolName}` because {reason}";
+                    break;
+                }
+
+                logs.AppendLine("- **Approval:** Approved.");
+                approvalStatus = "approved";
+            }
+
+            logs.AppendLine($"- **Executing Action:** `{definition.Name}`");
+            var execution = await toolService.ExecuteToolAsync(
+                new ToolExecutionRequest(
+                    definition.Name,
+                    argsJson,
+                    agentRunId,
+                    conversationId,
+                    approvalStatus),
+                cancellationToken);
+            var toolResult = execution.ResultJson;
+            logs.AppendLine($"- **Execution ID:** `{execution.ExecutionId}`");
+            logs.AppendLine($"- **Duration:** {execution.DurationMilliseconds} ms");
+            toolResults.Add($"{definition.Name}: {toolResult}");
+            logs.AppendLine(
+                $"- **Result:** {TruncateForLog(SanitizeJsonForLog(toolResult), MaxLogResultLength)}");
             logs.AppendLine();
 
             messages.Add(new AiChatTurn("assistant", result.Content));
-            messages.Add(new AiChatTurn("user", $"Tool `{toolName}` executed. Result: {toolResult}"));
+            messages.Add(new AiChatTurn("user", $"Tool `{definition.Name}` executed. Result: {toolResult}"));
         }
 
         if (string.IsNullOrWhiteSpace(finalAnswer))
         {
-            finalAnswer = BuildFallbackAnswer(instruction, toolResults);
+            logs.AppendLine($"- **Stopped:** Reached the {MaxAgentSteps}-step execution limit.");
+            finalAnswer =
+                $"I stopped after {MaxAgentSteps} tool steps without reaching a final answer. " +
+                "Review the execution log before retrying.";
         }
 
         return (finalAnswer, logs.ToString().TrimEnd());
+    }
+
+    private async Task<ToolApprovalDecision> RequestToolApprovalAsync(
+        ToolDefinition definition,
+        string argumentsJson,
+        CancellationToken cancellationToken)
+    {
+        if (toolApprovalService is null)
+        {
+            return new ToolApprovalDecision(false, "no approval service is available");
+        }
+
+        try
+        {
+            return await toolApprovalService.RequestApprovalAsync(
+                new ToolApprovalRequest(
+                    definition.Name,
+                    definition.Description,
+                    definition.RiskLevel,
+                    argumentsJson),
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return new ToolApprovalDecision(false, "the approval request failed");
+        }
     }
 
     public async Task<AgentPlan> PlanAsync(string instruction, CancellationToken cancellationToken = default)
@@ -288,6 +422,85 @@ public class AgentService(
             trimmed = trimmed[..^"```".Length];
         }
         return trimmed.Trim();
+    }
+
+    private static bool IsProviderConversationRole(string role)
+    {
+        return role.Equals("user", StringComparison.OrdinalIgnoreCase) ||
+            role.Equals("assistant", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCurrentInstructionAlreadyPresent(
+        IReadOnlyList<AiChatTurn> messages,
+        string instruction)
+    {
+        var lastConversationTurn = messages.LastOrDefault(message =>
+            !message.Role.Equals("system", StringComparison.OrdinalIgnoreCase));
+        return lastConversationTurn is not null &&
+            lastConversationTurn.Role.Equals("user", StringComparison.OrdinalIgnoreCase) &&
+            lastConversationTurn.Content.Trim().Equals(instruction.Trim(), StringComparison.Ordinal);
+    }
+
+    private static string SanitizeJsonForLog(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return JsonSerializer.Serialize(SanitizeJsonElement(document.RootElement));
+        }
+        catch (JsonException)
+        {
+            return TruncateForLog(json, MaxLogValueLength);
+        }
+    }
+
+    private static object? SanitizeJsonElement(JsonElement element, string? propertyName = null)
+    {
+        if (IsSensitiveProperty(propertyName))
+        {
+            return "[redacted]";
+        }
+
+        return element.ValueKind switch
+        {
+            JsonValueKind.Object => element.EnumerateObject()
+                .ToDictionary(
+                    property => property.Name,
+                    property => SanitizeJsonElement(property.Value, property.Name)),
+            JsonValueKind.Array => element.EnumerateArray()
+                .Take(20)
+                .Select(item => SanitizeJsonElement(item))
+                .ToList(),
+            JsonValueKind.String => TruncateForLog(element.GetString() ?? string.Empty, MaxLogValueLength),
+            JsonValueKind.Number => element.TryGetInt64(out var integer)
+                ? integer
+                : element.TryGetDouble(out var number) ? number : element.GetRawText(),
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Null or JsonValueKind.Undefined => null,
+            _ => TruncateForLog(element.GetRawText(), MaxLogValueLength)
+        };
+    }
+
+    private static bool IsSensitiveProperty(string? propertyName)
+    {
+        if (string.IsNullOrWhiteSpace(propertyName))
+        {
+            return false;
+        }
+
+        return propertyName.Contains("token", StringComparison.OrdinalIgnoreCase) ||
+            propertyName.Contains("secret", StringComparison.OrdinalIgnoreCase) ||
+            propertyName.Contains("password", StringComparison.OrdinalIgnoreCase) ||
+            propertyName.Contains("apiKey", StringComparison.OrdinalIgnoreCase) ||
+            propertyName.Contains("authorization", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string TruncateForLog(string value, int maxLength)
+    {
+        return value.Length <= maxLength
+            ? value
+            : value[..maxLength] + "...";
     }
 
     private static string BuildFallbackAnswer(string instruction, IReadOnlyList<string> toolResults)

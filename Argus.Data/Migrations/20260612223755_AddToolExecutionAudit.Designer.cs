@@ -3,6 +3,7 @@ using System;
 using Argus.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Argus.Data.Migrations
 {
     [DbContext(typeof(ArgusDbContext))]
-    partial class ArgusDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260612223755_AddToolExecutionAudit")]
+    partial class AddToolExecutionAudit
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.8");

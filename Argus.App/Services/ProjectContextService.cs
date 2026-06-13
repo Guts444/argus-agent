@@ -6,6 +6,20 @@ namespace Argus.App.Services;
 
 public sealed class ProjectContextService(ISettingsService settingsService) : IProjectContextService
 {
+    private static readonly HashSet<string> ExcludedDirectoryNames = new(
+        [
+            ".git",
+            ".vs",
+            ".idea",
+            "bin",
+            "obj",
+            "node_modules",
+            "packages",
+            "artifacts",
+            "TestResults"
+        ],
+        StringComparer.OrdinalIgnoreCase);
+
     private IReadOnlyList<ProjectContext>? cachedContexts;
 
     public async Task<IReadOnlyList<ProjectContext>> ScanProjectsAsync(CancellationToken cancellationToken = default)
@@ -16,23 +30,57 @@ public sealed class ProjectContextService(ISettingsService settingsService) : IP
             return Array.Empty<ProjectContext>();
         }
 
-        var projectsRoot = Path.GetFullPath(configuredPath);
+        string projectsRoot;
+        try
+        {
+            projectsRoot = Path.GetFullPath(configuredPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return Array.Empty<ProjectContext>();
+        }
 
         if (!Directory.Exists(projectsRoot))
         {
             return Array.Empty<ProjectContext>();
         }
 
-        var directories = Directory.GetDirectories(projectsRoot)
-            .Where(path => !Path.GetFileName(path).StartsWith('.'))
-            .OrderBy(Path.GetFileName)
-            .Take(100)
-            .ToList();
+        List<string> directories;
+        try
+        {
+            directories = Directory.EnumerateDirectories(projectsRoot)
+                .Where(path => !ExcludedDirectoryNames.Contains(Path.GetFileName(path)))
+                .Where(path => !Path.GetFileName(path).StartsWith('.'))
+                .Where(path => !File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint))
+                .OrderBy(Path.GetFileName)
+                .Take(100)
+                .ToList();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Array.Empty<ProjectContext>();
+        }
+        catch (IOException)
+        {
+            return Array.Empty<ProjectContext>();
+        }
 
         var contexts = new List<ProjectContext>();
         foreach (var directory in directories)
         {
-            contexts.Add(await BuildContextAsync(directory, cancellationToken));
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                contexts.Add(await BuildContextAsync(directory, cancellationToken));
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            {
+                // Skip unreadable project folders without aborting the entire opt-in scan.
+            }
         }
 
         cachedContexts = contexts;
@@ -44,6 +92,7 @@ public sealed class ProjectContextService(ISettingsService settingsService) : IP
         var contexts = cachedContexts ?? await ScanProjectsAsync(cancellationToken);
         var normalizedTitle = Normalize(nodeTitle);
         return contexts.FirstOrDefault(context => Normalize(context.Name) == normalizedTitle)
+            ?? contexts.FirstOrDefault(context => Normalize(ExtractReadmeTitle(context.ReadmePreview)) == normalizedTitle)
             ?? contexts.FirstOrDefault(context => Normalize(context.Name).Contains(normalizedTitle) || normalizedTitle.Contains(Normalize(context.Name)));
     }
 
@@ -53,12 +102,22 @@ public sealed class ProjectContextService(ISettingsService settingsService) : IP
         var readmePath = FindReadme(directory);
         var readmePreview = readmePath is null
             ? "No README found."
-            : SummarizeReadme(await File.ReadAllTextAsync(readmePath, cancellationToken));
+            : new FileInfo(readmePath).Length > 1_000_000
+                ? "README omitted because it is larger than 1 MB."
+                : ProjectContextPrivacy.RedactReadme(
+                    SummarizeReadme(await File.ReadAllTextAsync(readmePath, cancellationToken)));
 
-        var branch = await RunGitAsync(directory, "branch --show-current", cancellationToken);
-        var remote = await RunGitAsync(directory, "remote get-url origin", cancellationToken);
-        var status = await RunGitAsync(directory, "status --short", cancellationToken);
-        var hasChanges = !string.IsNullOrWhiteSpace(status);
+        var branch = await RunGitAsync(directory, cancellationToken, "branch", "--show-current");
+        var remote = ProjectContextPrivacy.SanitizeRemote(
+            await RunGitAsync(directory, cancellationToken, "remote", "get-url", "origin"));
+        var rawStatus = await RunGitAsync(
+            directory,
+            cancellationToken,
+            "status",
+            "--short",
+            "--untracked-files=normal");
+        var hasChanges = !string.IsNullOrWhiteSpace(rawStatus);
+        var status = ProjectContextPrivacy.SanitizeGitStatus(rawStatus);
         var state = BuildStateSummary(readmePath, branch, remote, hasChanges, status);
 
         return new ProjectContext(
@@ -84,14 +143,18 @@ public sealed class ProjectContextService(ISettingsService settingsService) : IP
         var lines = readme
             .Split(["\r\n", "\n"], StringSplitOptions.None)
             .Select(line => line.Trim())
-            .Where(line => line.Length > 0 && !line.StartsWith("![", StringComparison.Ordinal))
+            .Where(line =>
+                line.Length > 0 &&
+                !line.StartsWith("![", StringComparison.Ordinal) &&
+                !line.StartsWith("[![", StringComparison.Ordinal) &&
+                !line.StartsWith('<'))
             .Take(16);
 
         var preview = string.Join(Environment.NewLine, lines);
         return preview.Length <= 1600 ? preview : preview[..1600] + "...";
     }
 
-    private static string BuildStateSummary(string? readmePath, string branch, string remote, bool hasChanges, string status)
+    private static string BuildStateSummary(string? readmePath, string branch, string? remote, bool hasChanges, string status)
     {
         var parts = new List<string>
         {
@@ -110,34 +173,76 @@ public sealed class ProjectContextService(ISettingsService settingsService) : IP
         return string.Join(Environment.NewLine, parts);
     }
 
-    private static async Task<string> RunGitAsync(string directory, string arguments, CancellationToken cancellationToken)
+    private static async Task<string> RunGitAsync(
+        string directory,
+        CancellationToken cancellationToken,
+        params string[] arguments)
     {
+        using var process = new Process();
         try
         {
-            using var process = new Process();
             process.StartInfo = new ProcessStartInfo
             {
                 FileName = "git",
-                Arguments = $"-C \"{directory}\" {arguments}",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+            process.StartInfo.ArgumentList.Add("-C");
+            process.StartInfo.ArgumentList.Add(directory);
+            foreach (var argument in arguments)
+            {
+                process.StartInfo.ArgumentList.Add(argument);
+            }
 
             process.Start();
             var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
             await process.WaitForExitAsync(cancellationToken).WaitAsync(TimeSpan.FromSeconds(3), cancellationToken);
             return process.ExitCode == 0 ? (await outputTask).Trim() : string.Empty;
         }
+        catch (TimeoutException)
+        {
+            TryKill(process);
+            return string.Empty;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            TryKill(process);
+            throw;
+        }
         catch
         {
+            TryKill(process);
             return string.Empty;
+        }
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
         }
     }
 
     private static string Normalize(string value)
     {
         return new string(value.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+    }
+
+    private static string ExtractReadmeTitle(string readmePreview)
+    {
+        var heading = readmePreview
+            .Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .FirstOrDefault(line => line.StartsWith("# ", StringComparison.Ordinal));
+        return heading is null ? string.Empty : heading[2..].Trim();
     }
 }
