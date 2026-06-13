@@ -33,6 +33,7 @@ public partial class MainPageViewModel(
     IAppUpdateService appUpdateService,
     ISecretStore secretStore,
     IToolExecutionAuditService auditService,
+    IProjectDashboardService projectDashboardService,
     DatabaseBackupService databaseBackupService) : ObservableObject
 {
     private bool initialized;
@@ -224,6 +225,11 @@ public partial class MainPageViewModel(
 
     [ObservableProperty]
     public partial DashboardSnapshot? Dashboard { get; set; }
+
+    [ObservableProperty]
+    public partial CoherentDashboard? ProjectCockpit { get; set; }
+
+    public ObservableCollection<ProjectDashboardCard> ProjectCockpitCards { get; } = new();
 
     [ObservableProperty]
     public partial DashboardWidgetsViewModel? DashboardWidgets { get; set; }
@@ -1656,6 +1662,20 @@ public partial class MainPageViewModel(
     private async Task LoadDashboardAsync()
     {
         Dashboard = await graphService.GetDashboardAsync();
+        await LoadProjectCockpitAsync();
+    }
+
+    private async Task LoadProjectCockpitAsync()
+    {
+        try
+        {
+            ProjectCockpit = await projectDashboardService.BuildAsync();
+            Replace(ProjectCockpitCards, ProjectCockpit?.ProjectCards ?? []);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Project cockpit load failed: {ex.Message}");
+        }
     }
 
     private DashboardWidgetsViewModel EnsureDashboardWidgets()

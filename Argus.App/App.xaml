@@ -26,6 +26,10 @@
             <converters:DateTimeOffsetToStringConverter x:Key="DateTimeOffsetToStringConverter" />
             <converters:OutcomeToBrushConverter x:Key="OutcomeToBrushConverter" />
             <converters:DurationFormatConverter x:Key="DurationFormatConverter" />
+            <converters:CountToVisibilityConverter x:Key="CountToVisibilityConverter" />
+            <converters:StringToVisibilityConverter x:Key="StringToVisibilityConverter" />
+            <converters:WarningBackgroundConverter x:Key="WarningBackgroundConverter" />
+            <converters:WarningForegroundConverter x:Key="WarningForegroundConverter" />
 
             <SolidColorBrush x:Key="ArgusBackgroundBrush" Color="#FF060910" />
             <SolidColorBrush x:Key="SidebarBrush" Color="#EE080D18" />

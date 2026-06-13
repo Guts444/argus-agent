@@ -86,6 +86,7 @@ public partial class App : Application
         services.AddSingleton<ITelegramGatewayService, TelegramGatewayService>();
         services.AddSingleton<ISoulService, SoulService>();
         services.AddSingleton<IProjectContextService, ProjectContextService>();
+        services.AddSingleton<IProjectDashboardService, ProjectDashboardService>();
         services.AddSingleton<ISystemMonitorService, SystemMonitorService>();
         services.AddSingleton<IStockService, StockService>();
         services.AddSingleton<INewsService, NewsService>();
