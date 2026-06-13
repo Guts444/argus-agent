@@ -1066,6 +1066,8 @@
                             <ProgressBar Minimum="0" Maximum="100" Value="{Binding ContextTrackerPercent}" />
                             <TextBlock Text="{Binding ContextTrackerText}" FontFamily="Cascadia Code" FontSize="13" />
                             <TextBlock Text="{Binding ContextTrackerDetailText}" Style="{StaticResource MetaTextStyle}" TextWrapping="WrapWholeWords" />
+                            <TextBlock Text="{Binding ContextBreakdownText}" Style="{StaticResource MetaTextStyle}" FontSize="10" TextWrapping="WrapWholeWords"
+                                       Visibility="{Binding ContextBreakdownText, Converter={StaticResource EmptyStringToVisibilityConverter}}" />
                         </StackPanel>
                     </Flyout>
                 </Button.Flyout>

@@ -155,6 +155,9 @@ public partial class MainPageViewModel(
     public partial string ContextTrackerDetailText { get; set; } = "No model usage yet.";
 
     [ObservableProperty]
+    public partial string ContextBreakdownText { get; set; } = string.Empty;
+
+    [ObservableProperty]
     public partial bool ShowThinkingInApp { get; set; }
 
     [ObservableProperty]
@@ -1599,7 +1602,7 @@ public partial class MainPageViewModel(
                 ProjectContexts.Take(24).Select(project =>
                     $"- {project.Name}: {ProjectContextPrivacy.SanitizeStateSummary(project.StateSummary).Replace(Environment.NewLine, " | ")}"));
 
-        return new List<AiChatTurn>
+        var turns = new List<AiChatTurn>
         {
             new("system", SoulText),
             new("system",
@@ -1616,6 +1619,19 @@ public partial class MainPageViewModel(
                 Use this context across sessions. When useful, suggest graph nodes, memories, project links, and next actions.
                 """)
         };
+
+        // Per-source token breakdown
+        var soulTokens = AiModelCatalog.EstimateTokens([SoulText]);
+        var memoryTokens = AiModelCatalog.EstimateTokens([memoryContext]);
+        var projectTokens = AiModelCatalog.EstimateTokens([projectContext]);
+        var projectsIndexTokens = AiModelCatalog.EstimateTokens([knownProjects]);
+        ContextBreakdownText =
+            $"Soul: ~{AiModelCatalog.FormatTokenCount(soulTokens)}  ·  " +
+            $"Memories: ~{AiModelCatalog.FormatTokenCount(memoryTokens)}  ·  " +
+            $"Project: ~{AiModelCatalog.FormatTokenCount(projectTokens)}  ·  " +
+            $"Index: ~{AiModelCatalog.FormatTokenCount(projectsIndexTokens)}";
+
+        return turns;
     }
 
     private async Task LoadGraphAsync()
