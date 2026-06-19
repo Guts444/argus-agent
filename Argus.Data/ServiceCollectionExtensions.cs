@@ -23,6 +23,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IMemoryProvider>(provider => (LocalMemoryService)provider.GetRequiredService<IMemoryService>());
         services.AddSingleton<IToolExecutionAuditService, ToolExecutionAuditService>();
         services.AddSingleton<ISettingsService, SettingsService>();
+        services.AddSingleton<IProjectInstructionService, ProjectInstructionService>();
+        services.AddSingleton<IProjectActionDispositionService, ProjectActionDispositionService>();
         return services;
     }
 }

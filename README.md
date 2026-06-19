@@ -107,6 +107,19 @@ recommended. Docker Desktop is optional and only required for SearXNG research.
   you choose one.
 - Reads README previews, Git remotes, branches, and working-tree summaries.
 - Creates or refreshes project nodes from local folders.
+- Turns Project Cockpit recommendations into reviewed actions that can create
+  a task, remove one exact blocker relationship, open a project, or inspect
+  Git state.
+- Persists one-day snoozes and dismissed recommendations locally, with a
+  restore control.
+- Generates optional next-action proposals only when requested. Argus sends
+  the redacted project preview and redacted project instructions to the
+  selected provider, accepts only a strict allow-listed action format, labels
+  results as proposals, and requires review before execution.
+- Stores optional instructions for each graph project locally. Instructions
+  can shape selected-project chat, Codex/agent behavior, summaries, and
+  proposals, but cannot change tool permissions, approval requirements,
+  privacy rules, or proposal command limits.
 - Uses an LLM to summarize selected projects and saves the result back into the
   graph and memory.
 
@@ -329,10 +342,15 @@ Argus.Tests  unit and integration coverage
 
 ## Status
 
-Argus `v0.3.3` - fixes the v0.3 startup crash caused by an undefined
-`ArgusVioletBrush` resource, moves dashboard next actions into a dedicated
-widget, restores the v0.3 empty states and graph-search results, and adds XAML
-and project-cockpit regression coverage.
+Argus `v0.4.0-preview.1` is under local development and is not released yet.
+The first v0.4 milestone adds redacted rolling diagnostics, timed startup
+markers, shared cancellable project snapshots, typed Project Cockpit actions,
+packaged fresh/existing database startup smoke tests, durable recommendation
+snooze/dismiss state, semantic review dialogs for graph mutations, and audited
+task creation/blocker resolution. It also adds cancellable, user-triggered AI
+proposal generation with strict parsing and redacted project context, plus
+local per-project instructions that safely shape selected-project AI context.
+No v0.4 release has been published.
 
 ## License
 

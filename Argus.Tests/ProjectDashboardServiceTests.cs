@@ -37,7 +37,7 @@ public sealed class ProjectDashboardServiceTests
             [project, task, decision, blocker],
             [
                 Link(task, project, "belongs_to"),
-                Link(decision, project, "documents"),
+                Link(decision, project, "belongs_to"),
                 Link(task, blocker, "blocked_by")
             ]);
         var dashboard = new DashboardSnapshot(
@@ -73,18 +73,88 @@ public sealed class ProjectDashboardServiceTests
             card.BlockerDescriptions,
             text => text.Contains("Fix dashboard layout", StringComparison.Ordinal));
         Assert.Contains(
-            card.NextActions,
-            text => text.Contains("Resolve blockers", StringComparison.Ordinal));
+            card.Actions,
+            action =>
+                action.Command == ProjectActionCommand.ResolveBlocker &&
+                action.ProjectId == project.Id &&
+                action.Urgency == ProjectActionUrgency.Critical &&
+                action.SubjectNodeId == task.Id &&
+                action.TargetNodeId == blocker.Id &&
+                action.TargetEdgeId.HasValue);
         Assert.Contains(
-            card.NextActions,
-            text => text.Contains("commit local changes", StringComparison.OrdinalIgnoreCase));
+            card.Actions,
+            action =>
+                action.Command == ProjectActionCommand.ReviewGitState &&
+                action.Category == ProjectActionCategory.SourceControl &&
+                action.ProjectPath == projectContext.Path);
         Assert.Contains(
             result.GlobalNextActions,
-            text => text.Contains("active blockers", StringComparison.Ordinal));
+            action => action.Command == ProjectActionCommand.ResolveBlocker);
         Assert.Contains(
             result.GlobalNextActions,
-            text => text.Contains("repo warnings", StringComparison.Ordinal));
-        Assert.Equal("2 priorities", result.GlobalNextActionCountText);
+            action => action.Command == ProjectActionCommand.ReviewGitState);
+        Assert.All(
+            result.GlobalNextActions,
+            action =>
+            {
+                Assert.Equal(project.Id, action.ProjectId);
+                Assert.False(string.IsNullOrWhiteSpace(action.Explanation));
+            });
+        Assert.Equal(
+            $"{result.GlobalNextActions.Count} priorities",
+            result.GlobalNextActionCountText);
+    }
+
+    [Fact]
+    public async Task BuildAsyncUsesCanonicalMembershipAndIgnoresCompletedTasks()
+    {
+        var project = new Node
+        {
+            Title = "Argus",
+            Type = "Project",
+            Summary = "A local-first AI workspace for Windows."
+        };
+        var activeTask = new Node
+        {
+            Title = "Implement review flow",
+            Type = "Task",
+            Status = "Active"
+        };
+        var completedTask = new Node
+        {
+            Title = "Ship v0.3.3",
+            Type = "Task",
+            Status = "Completed"
+        };
+        var unrelatedTask = new Node
+        {
+            Title = "Referenced but not owned",
+            Type = "Task",
+            Status = "Active"
+        };
+        var graph = new GraphSnapshot(
+            [project, activeTask, completedTask, unrelatedTask],
+            [
+                Link(activeTask, project, "belongs_to"),
+                Link(activeTask, project, "belongs_to"),
+                Link(completedTask, project, "belongs_to"),
+                Link(project, unrelatedTask, "related_to")
+            ]);
+        var dashboard = new DashboardSnapshot(
+            [project],
+            [],
+            [],
+            [activeTask, completedTask, unrelatedTask],
+            [],
+            [],
+            []);
+        var service = new ProjectDashboardService(
+            new StubGraphService(graph, dashboard),
+            new StubProjectContextService([]));
+
+        var result = await service.BuildAsync();
+
+        Assert.Equal(1, Assert.Single(result.ProjectCards).OpenTaskCount);
     }
 
     private static Edge Link(Node source, Node target, string relationshipType)
@@ -148,6 +218,23 @@ public sealed class ProjectDashboardServiceTests
     private sealed class StubProjectContextService(
         IReadOnlyList<ProjectContext> contexts) : IProjectContextService
     {
+        public ProjectContextSnapshot? CurrentSnapshot { get; private set; } =
+            new(contexts, DateTimeOffset.UtcNow);
+
+        public bool IsRefreshing => false;
+
+        public Task<ProjectContextSnapshot> GetSnapshotAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(CurrentSnapshot!);
+
+        public Task<ProjectContextSnapshot> RefreshSnapshotAsync(
+            CancellationToken cancellationToken = default) =>
+            GetSnapshotAsync(cancellationToken);
+
+        public void CancelRefresh()
+        {
+        }
+
         public Task<IReadOnlyList<ProjectContext>> ScanProjectsAsync(
             CancellationToken cancellationToken = default) =>
             Task.FromResult(contexts);

@@ -10,15 +10,38 @@ public sealed class ProjectDashboardService(
 {
     public async Task<CoherentDashboard> BuildAsync(CancellationToken cancellationToken = default)
     {
+        ProjectContextSnapshot projectSnapshot;
+        try
+        {
+            projectSnapshot = await projectContextService.GetSnapshotAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            projectSnapshot = new ProjectContextSnapshot(
+                [],
+                DateTimeOffset.UtcNow,
+                "Project status is unavailable.");
+        }
+
+        return await BuildAsync(projectSnapshot, cancellationToken);
+    }
+
+    public async Task<CoherentDashboard> BuildAsync(
+        ProjectContextSnapshot projectSnapshot,
+        CancellationToken cancellationToken = default)
+    {
         var graph = await graphService.GetGraphAsync(cancellationToken);
         var snapshot = await graphService.GetDashboardAsync(cancellationToken);
 
         var projects = snapshot.ActiveProjects;
         var projectCards = new List<ProjectDashboardCard>();
         var globalBlockers = new List<string>();
-        var globalNextActions = new List<string>();
 
-        // Build edge lookup: target → blocking sources
+        // blocked_by is directional: the source item is blocked by the target item.
         var blockedBy = new Dictionary<Guid, List<Edge>>();
         foreach (var edge in graph.Edges)
         {
@@ -37,44 +60,41 @@ public sealed class ProjectDashboardService(
 
         foreach (var node in graph.Nodes.Where(n => !n.IsArchived))
         {
-            if (node.Type == "Task" && node.Status != "Done")
+            if (node.Type == "Task" &&
+                !node.Status.Equals("Completed", StringComparison.OrdinalIgnoreCase) &&
+                !node.Status.Equals("Archived", StringComparison.OrdinalIgnoreCase))
             {
-                // Find which project this task belongs to via edges
+                // Project membership is canonical task -> project via belongs_to.
                 foreach (var edge in graph.Edges.Where(e =>
-                    (e.SourceNodeId == node.Id || e.TargetNodeId == node.Id) &&
-                    projectIds.Contains(e.SourceNodeId == node.Id ? e.TargetNodeId : e.SourceNodeId)))
+                    e.SourceNodeId == node.Id &&
+                    projectIds.Contains(e.TargetNodeId) &&
+                    e.RelationshipType.Equals("belongs_to", StringComparison.OrdinalIgnoreCase)))
                 {
-                    var projectId = edge.SourceNodeId == node.Id ? edge.TargetNodeId : edge.SourceNodeId;
+                    var projectId = edge.TargetNodeId;
                     if (!tasksByProject.ContainsKey(projectId))
                         tasksByProject[projectId] = new List<Node>();
-                    tasksByProject[projectId].Add(node);
+                    if (tasksByProject[projectId].All(task => task.Id != node.Id))
+                        tasksByProject[projectId].Add(node);
                 }
             }
 
             if (node.Type == "Decision")
             {
                 foreach (var edge in graph.Edges.Where(e =>
-                    (e.SourceNodeId == node.Id || e.TargetNodeId == node.Id) &&
-                    projectIds.Contains(e.SourceNodeId == node.Id ? e.TargetNodeId : e.SourceNodeId)))
+                    e.SourceNodeId == node.Id &&
+                    projectIds.Contains(e.TargetNodeId) &&
+                    e.RelationshipType.Equals("belongs_to", StringComparison.OrdinalIgnoreCase)))
                 {
-                    var projectId = edge.SourceNodeId == node.Id ? edge.TargetNodeId : edge.SourceNodeId;
+                    var projectId = edge.TargetNodeId;
                     if (!decisionsByProject.ContainsKey(projectId))
                         decisionsByProject[projectId] = new List<Node>();
-                    decisionsByProject[projectId].Add(node);
+                    if (decisionsByProject[projectId].All(decision => decision.Id != node.Id))
+                        decisionsByProject[projectId].Add(node);
                 }
             }
         }
 
-        // Try to get project contexts for repo health
-        IReadOnlyList<ProjectContext>? contexts = null;
-        try
-        {
-            contexts = await projectContextService.ScanProjectsAsync(cancellationToken);
-        }
-        catch
-        {
-            // Project scanning may fail if no root path configured
-        }
+        var contexts = projectSnapshot.Projects;
 
         foreach (var project in projects)
         {
@@ -86,6 +106,9 @@ public sealed class ProjectDashboardService(
 
             // Blocker detection
             var blockerDescriptions = new List<string>();
+            var blockerTargets = new List<Guid>();
+            var blockerSubjects = new List<Guid>();
+            var blockerEdges = new List<Guid>();
             blockedBy.TryGetValue(project.Id, out var projectBlockers);
             if (projectBlockers is { Count: > 0 })
             {
@@ -93,7 +116,12 @@ public sealed class ProjectDashboardService(
                 {
                     var blocker = graph.Nodes.FirstOrDefault(n => n.Id == edge.TargetNodeId);
                     if (blocker is not null)
+                    {
                         blockerDescriptions.Add($"{blocker.Title} blocks {project.Title}");
+                        blockerTargets.Add(blocker.Id);
+                        blockerSubjects.Add(project.Id);
+                        blockerEdges.Add(edge.Id);
+                    }
                 }
             }
 
@@ -108,7 +136,12 @@ public sealed class ProjectDashboardService(
                         {
                             var blocker = graph.Nodes.FirstOrDefault(n => n.Id == edge.TargetNodeId);
                             if (blocker is not null)
+                            {
                                 blockerDescriptions.Add($"{blocker.Title} blocks task '{task.Title}'");
+                                blockerTargets.Add(blocker.Id);
+                                blockerSubjects.Add(task.Id);
+                                blockerEdges.Add(edge.Id);
+                            }
                         }
                     }
                 }
@@ -119,7 +152,7 @@ public sealed class ProjectDashboardService(
             string? repoHealthDetail = null;
             var hasRepoWarning = false;
 
-            var context = contexts?.FirstOrDefault(c =>
+            var context = contexts.FirstOrDefault(c =>
                 c.Name.Equals(project.Title, StringComparison.OrdinalIgnoreCase));
             if (context is not null)
             {
@@ -141,23 +174,111 @@ public sealed class ProjectDashboardService(
                 repoHealthDetail = context.StateSummary;
             }
 
-            // Next actions (rule-based)
-            var nextActions = new List<string>();
+            var actions = new List<ProjectAction>();
             if (taskCount == 0)
-                nextActions.Add("Create a task node for the next concrete step");
-            if (decisionCount == 0)
-                nextActions.Add("Record pending decisions as Decision nodes");
-            if (blockerDescriptions.Count > 0)
-                nextActions.Add("Resolve blockers before starting new work");
-            if (context is { HasUncommittedChanges: true })
-                nextActions.Add("Review and commit local changes");
-            if (context is { ReadmePath: null })
-                nextActions.Add("Add a README with project status and setup steps");
-            if (string.IsNullOrWhiteSpace(project.Summary) || project.Summary.Length < 30)
-                nextActions.Add("Update project summary with current state");
+            {
+                actions.Add(new ProjectAction(
+                    project.Id,
+                    project.Title,
+                    ProjectActionCategory.Planning,
+                    ProjectActionUrgency.High,
+                    "Create the next task",
+                    "This project has no open tasks. Define one concrete next step.",
+                    ProjectActionCommand.CreateTask,
+                    RecommendationCode: "missing-open-task"));
+            }
 
-            if (nextActions.Count == 0)
-                nextActions.Add("Project looks healthy — review open tasks");
+            if (decisionCount == 0)
+            {
+                actions.Add(new ProjectAction(
+                    project.Id,
+                    project.Title,
+                    ProjectActionCategory.Navigation,
+                    ProjectActionUrgency.Low,
+                    "Review project decisions",
+                    "No decisions are connected to this project yet.",
+                    ProjectActionCommand.OpenProject,
+                    ProjectPath: context?.Path,
+                    RecommendationCode: "missing-decision"));
+            }
+
+            if (blockerDescriptions.Count > 0)
+            {
+                actions.Add(new ProjectAction(
+                    project.Id,
+                    project.Title,
+                    ProjectActionCategory.Blocker,
+                    ProjectActionUrgency.Critical,
+                    "Resolve the active blocker",
+                    $"{blockerDescriptions[0]}. Removing the relationship will not complete or delete either item.",
+                    ProjectActionCommand.ResolveBlocker,
+                    TargetNodeId: blockerTargets.Count > 0
+                        ? blockerTargets[0]
+                        : null,
+                    SubjectNodeId: blockerSubjects.Count > 0
+                        ? blockerSubjects[0]
+                        : null,
+                    TargetEdgeId: blockerEdges.Count > 0
+                        ? blockerEdges[0]
+                        : null,
+                    RecommendationCode: "active-blocker"));
+            }
+
+            if (context is { HasUncommittedChanges: true })
+            {
+                actions.Add(new ProjectAction(
+                    project.Id,
+                    project.Title,
+                    ProjectActionCategory.SourceControl,
+                    ProjectActionUrgency.High,
+                    "Review Git state",
+                    "The working tree has local changes that may need review or a commit.",
+                    ProjectActionCommand.ReviewGitState,
+                    ProjectPath: context.Path,
+                    RecommendationCode: "uncommitted-changes"));
+            }
+
+            if (context is { ReadmePath: null })
+            {
+                actions.Add(new ProjectAction(
+                    project.Id,
+                    project.Title,
+                    ProjectActionCategory.Maintenance,
+                    ProjectActionUrgency.Normal,
+                    "Open project and add a README",
+                    "No README was found in the project root.",
+                    ProjectActionCommand.OpenProject,
+                    ProjectPath: context.Path,
+                    RecommendationCode: "missing-readme"));
+            }
+
+            if (string.IsNullOrWhiteSpace(project.Summary) || project.Summary.Length < 30)
+            {
+                actions.Add(new ProjectAction(
+                    project.Id,
+                    project.Title,
+                    ProjectActionCategory.Maintenance,
+                    ProjectActionUrgency.Low,
+                    "Review project summary",
+                    "The project summary is missing or too short to explain its current state.",
+                    ProjectActionCommand.OpenProject,
+                    ProjectPath: context?.Path,
+                    RecommendationCode: "missing-summary"));
+            }
+
+            if (actions.Count == 0)
+            {
+                actions.Add(new ProjectAction(
+                    project.Id,
+                    project.Title,
+                    ProjectActionCategory.Maintenance,
+                    ProjectActionUrgency.Low,
+                    "Refresh project status",
+                    "The project looks healthy. Refresh when local state changes.",
+                    ProjectActionCommand.RefreshProjectStatus,
+                    ProjectPath: context?.Path,
+                    RecommendationCode: "healthy-refresh"));
+            }
 
             // Collect global alerts
             if (blockerDescriptions.Count > 0)
@@ -169,26 +290,22 @@ public sealed class ProjectDashboardService(
                 decisionCount,
                 blockerDescriptions.Count,
                 blockerDescriptions,
-                nextActions,
+                actions
+                    .OrderByDescending(action => action.Urgency)
+                    .ThenBy(action => action.Title, StringComparer.OrdinalIgnoreCase)
+                    .ToArray(),
                 repoHealthLabel,
                 repoHealthDetail,
                 hasRepoWarning));
         }
 
-        // Global next actions: top priorities across all projects
-        var projectsWithNoTasks = projectCards.Count(c => c.OpenTaskCount == 0);
-        var projectsWithBlockers = projectCards.Count(c => c.BlockerCount > 0);
-        var projectsWithWarnings = projectCards.Count(c => c.HasRepoWarning);
-
-        if (projectsWithBlockers > 0)
-            globalNextActions.Add($"{projectsWithBlockers} project(s) have active blockers — resolve them first");
-        if (projectsWithNoTasks > 0)
-            globalNextActions.Add($"{projectsWithNoTasks} project(s) have no open tasks — define next steps");
-        if (projectsWithWarnings > 0)
-            globalNextActions.Add($"{projectsWithWarnings} project(s) have repo warnings — check Git state");
-
-        if (globalNextActions.Count == 0)
-            globalNextActions.Add("All projects look healthy. Start a new initiative or review recent decisions.");
+        var globalNextActions = projectCards
+            .SelectMany(card => card.Actions)
+            .OrderByDescending(action => action.Urgency)
+            .ThenBy(action => action.ProjectTitle, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(action => action.Title, StringComparer.OrdinalIgnoreCase)
+            .Take(6)
+            .ToArray();
 
         return new CoherentDashboard(
             projectCards,
@@ -198,17 +315,4 @@ public sealed class ProjectDashboardService(
             globalBlockers.Count);
     }
 
-    public async Task<CoherentDashboard> EnrichWithLLMAsync(
-        CoherentDashboard dashboard,
-        AiProviderProfile? provider,
-        string soulText,
-        IReadOnlyList<ProjectContext> projectContexts,
-        CancellationToken cancellationToken = default)
-    {
-        // LLM enrichment is opt-in and gated on having a configured provider.
-        // For v0.3, the rule-based dashboard is the default; LLM enrichment
-        // is triggered explicitly by the user via "Summarize Project" or
-        // a future "Generate Next Actions" dashboard button.
-        return dashboard;
-    }
 }

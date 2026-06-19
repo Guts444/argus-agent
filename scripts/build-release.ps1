@@ -55,6 +55,11 @@ foreach ($requiredFile in $requiredPublishFiles) {
     }
 }
 
+& (Join-Path $root "scripts\test-packaged-app.ps1") -PublishDirectory $publish
+if ($LASTEXITCODE -ne 0) {
+    throw "Packaged application smoke tests failed with exit code $LASTEXITCODE."
+}
+
 $isccCandidates = @(
     "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
     "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",

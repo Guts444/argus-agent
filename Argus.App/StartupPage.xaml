@@ -82,6 +82,8 @@
                                     Click="RestoreButton_OnClick" />
                             <Button Content="Open data folder"
                                     Click="OpenDataFolderButton_OnClick" />
+                            <Button Content="Open diagnostics"
+                                    Click="OpenDiagnosticsFolderButton_OnClick" />
                         </StackPanel>
                     </StackPanel>
                 </Border>

@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml.Controls;
+using Argus.App.Services;
 using Argus.App.ViewModels;
 using Argus.Core.Models;
 using Microsoft.UI.Xaml;
@@ -43,6 +44,7 @@ public sealed partial class MainPage : Page
         Loaded -= MainPage_Loaded;
         await ViewModel.InitializeCommand.ExecuteAsync(null);
         GraphSurface.FitToView();
+        PackagedSmokeTest.Complete("dashboard-ready");
     }
 
     private void DashboardChatPulse_OnLoaded(object sender, RoutedEventArgs e)

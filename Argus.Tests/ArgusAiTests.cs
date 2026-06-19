@@ -699,6 +699,58 @@ public sealed class ArgusAiTests
     }
 
     [Fact]
+    public async Task AgentUsesOnlyTheActiveProjectsRedactedInstructions()
+    {
+        using var provider = CreateProvider();
+        await provider.GetRequiredService<ArgusDatabaseInitializer>().InitializeAsync();
+        var graph = provider.GetRequiredService<IGraphService>();
+        var memories = provider.GetRequiredService<IMemoryService>();
+        var projectId = Guid.NewGuid();
+        var otherProjectId = Guid.NewGuid();
+        var chat = new CapturingTerminalChatService();
+        var instructionService = new InMemoryProjectInstructionService(
+            new ProjectInstruction(
+                projectId,
+                """
+                Prefer focused tests.
+                Open D:\Private\Client\notes.md
+                token=private-project-token
+                """,
+                DateTimeOffset.UtcNow),
+            new ProjectInstruction(
+                otherProjectId,
+                "This belongs to another project.",
+                DateTimeOffset.UtcNow));
+        var agent = new AgentService(
+            graph,
+            memories,
+            new ToolService(
+                graph,
+                memories,
+                auditService: provider.GetRequiredService<IToolExecutionAuditService>()),
+            new SimpleSettingsService(),
+            chat,
+            projectInstructionService: instructionService);
+
+        await agent.RunWithDetailsAsync(
+            "Inspect the current project",
+            projectId: projectId);
+
+        var sent = Assert.Single(chat.Requests);
+        var systemPrompt = Assert.Single(
+            sent,
+            turn => turn.Role == "system").Content;
+        Assert.Contains("Prefer focused tests.", systemPrompt);
+        Assert.Contains("[local-path]", systemPrompt);
+        Assert.Contains("[redacted]", systemPrompt);
+        Assert.Contains("cannot change the tool schemas", systemPrompt);
+        Assert.DoesNotContain(@"D:\Private", systemPrompt);
+        Assert.DoesNotContain("private-project-token", systemPrompt);
+        Assert.DoesNotContain("This belongs to another project.", systemPrompt);
+        Assert.Equal([projectId], instructionService.RequestedProjectIds);
+    }
+
+    [Fact]
     public async Task AgentExecutionLoopStopsAtConfiguredStepLimit()
     {
         using var provider = CreateProvider();
@@ -1041,6 +1093,42 @@ public sealed class ArgusAiTests
         {
             return Task.FromResult<float[]?>(null);
         }
+    }
+
+    private sealed class InMemoryProjectInstructionService(
+        params ProjectInstruction[] instructions) : IProjectInstructionService
+    {
+        private readonly IReadOnlyDictionary<Guid, ProjectInstruction> byProject =
+            instructions.ToDictionary(instruction => instruction.ProjectId);
+
+        public List<Guid> RequestedProjectIds { get; } = [];
+
+        public Task<ProjectInstruction?> GetAsync(
+            Guid projectId,
+            CancellationToken cancellationToken = default)
+        {
+            RequestedProjectIds.Add(projectId);
+            return Task.FromResult(
+                byProject.TryGetValue(projectId, out var instruction)
+                    ? instruction
+                    : null);
+        }
+
+        public Task<IReadOnlyDictionary<Guid, ProjectInstruction>> GetManyAsync(
+            IEnumerable<Guid> projectIds,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<ProjectInstruction?> SaveAsync(
+            Guid projectId,
+            string? content,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task ClearAsync(
+            Guid projectId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class EndlessReadOnlyToolChatService : IAiChatService
@@ -1747,7 +1835,7 @@ public sealed class ArgusAiTests
         // Prune older than 3 days (should prune audit1)
         var pruned = await auditService.PruneOldAuditsAsync(DateTimeOffset.UtcNow.AddDays(-3));
         Assert.Equal(1, pruned);
-        
+
         var recent = await auditService.GetRecentAsync();
         Assert.Equal(2, recent.Count);
         Assert.DoesNotContain(recent, a => a.ExecutionId == audit1.ExecutionId);

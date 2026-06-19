@@ -1,8 +1,11 @@
+using Argus.Core.Services;
+
 namespace Argus.Data.Services;
 
 public sealed class DatabaseStartupService(
     DatabaseBackupService backupService,
-    ArgusDatabaseInitializer initializer)
+    ArgusDatabaseInitializer initializer,
+    IDiagnosticLog? diagnosticLog = null)
 {
     public async Task<DatabaseStartupResult> StartAsync(
         IProgress<DatabaseInitializationProgress>? progress = null,
@@ -11,12 +14,19 @@ public sealed class DatabaseStartupService(
         progress?.Report(new DatabaseInitializationProgress(
             "Protecting your workspace",
             "Creating a consistent local database safety backup."));
-        var backup = await backupService.CreateStartupBackupAsync(cancellationToken);
+        DatabaseBackupResult backup;
+        using (diagnosticLog?.BeginOperation("startup", "database_backup"))
+        {
+            backup = await backupService.CreateStartupBackupAsync(cancellationToken);
+        }
 
         progress?.Report(new DatabaseInitializationProgress(
             "Preparing Argus",
             backup.Message));
-        await initializer.InitializeAsync(cancellationToken, progress);
+        using (diagnosticLog?.BeginOperation("startup", "database_initialize"))
+        {
+            await initializer.InitializeAsync(cancellationToken, progress);
+        }
 
         progress?.Report(new DatabaseInitializationProgress(
             "Workspace ready",

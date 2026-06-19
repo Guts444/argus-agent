@@ -248,6 +248,42 @@
                                                 </Border>
                                             </StackPanel>
                                         </Grid>
+                                        <Grid ColumnSpacing="6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding ProjectRefreshStatusText}"
+                                                           Style="{StaticResource MetaTextStyle}"
+                                                           TextWrapping="WrapWholeWords" />
+                                                <TextBlock Text="{Binding ProjectRefreshLastUpdatedText}"
+                                                           FontFamily="Cascadia Code"
+                                                           FontSize="9"
+                                                           Foreground="{StaticResource ArgusMutedTextBrush}" />
+                                            </StackPanel>
+                                            <ProgressRing Grid.Column="1"
+                                                          Width="18"
+                                                          Height="18"
+                                                          IsActive="{Binding IsProjectRefreshBusy}"
+                                                          Visibility="{Binding IsProjectRefreshBusy, Converter={StaticResource BoolToVisibilityConverter}}"
+                                                          VerticalAlignment="Center" />
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4">
+                                                <Button Content="Refresh"
+                                                        Command="{Binding RefreshProjectCockpitCommand}" />
+                                                <Button Content="Restore hidden"
+                                                        Command="{Binding RestoreProjectRecommendationsCommand}" />
+                                                <Button Content="Cancel"
+                                                        Command="{Binding CancelProjectRefreshCommand}"
+                                                        Visibility="{Binding IsProjectRefreshBusy, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                            </StackPanel>
+                                        </Grid>
+                                        <TextBlock Text="{Binding ProjectRefreshErrorText}"
+                                                   FontSize="10"
+                                                   Foreground="{StaticResource ArgusAmberBrush}"
+                                                   TextWrapping="WrapWholeWords"
+                                                   Visibility="{Binding HasProjectRefreshError, Converter={StaticResource BoolToVisibilityConverter}}" />
                                     </StackPanel>
 
                                     <!-- Blocker alerts -->
@@ -280,13 +316,22 @@
                                                                 <TextBlock Text="{Binding ProjectNode.Summary}" Style="{StaticResource MetaTextStyle}"
                                                                            FontSize="10" MaxLines="1" TextTrimming="CharacterEllipsis" />
                                                             </StackPanel>
-                                                            <Border HorizontalAlignment="Right" VerticalAlignment="Top"
-                                                                    Padding="5,2" CornerRadius="3"
-                                                                    Background="{Binding HasRepoWarning, Converter={StaticResource WarningBackgroundConverter}}"
-                                                                    Visibility="{Binding HasRepoHealth, Converter={StaticResource BoolToVisibilityConverter}}">
-                                                                <TextBlock Text="{Binding RepoHealthDisplay}" FontFamily="Cascadia Code" FontSize="9"
-                                                                           Foreground="{Binding HasRepoWarning, Converter={StaticResource WarningForegroundConverter}}" />
-                                                            </Border>
+                                                            <StackPanel HorizontalAlignment="Right"
+                                                                        VerticalAlignment="Top"
+                                                                        Orientation="Horizontal"
+                                                                        Spacing="5">
+                                                                <Button Content="Instructions"
+                                                                        FontSize="9"
+                                                                        Padding="5,2"
+                                                                        Command="{Binding DataContext.EditProjectInstructionsCommand, ElementName=RootPage}"
+                                                                        CommandParameter="{Binding ProjectNode}" />
+                                                                <Border Padding="5,2" CornerRadius="3"
+                                                                        Background="{Binding HasRepoWarning, Converter={StaticResource WarningBackgroundConverter}}"
+                                                                        Visibility="{Binding HasRepoHealth, Converter={StaticResource BoolToVisibilityConverter}}">
+                                                                    <TextBlock Text="{Binding RepoHealthDisplay}" FontFamily="Cascadia Code" FontSize="9"
+                                                                               Foreground="{Binding HasRepoWarning, Converter={StaticResource WarningForegroundConverter}}" />
+                                                                </Border>
+                                                            </StackPanel>
                                                         </Grid>
 
                                                         <!-- Count badges -->
@@ -306,10 +351,16 @@
                                                             </Border>
                                                         </StackPanel>
 
-                                                        <!-- Next action (first one) -->
-                                                        <TextBlock Text="{Binding FirstNextAction}" FontSize="10"
-                                                                   Foreground="{StaticResource ArgusMutedTextBrush}"
-                                                                   TextTrimming="CharacterEllipsis" MaxLines="1" />
+                                                        <Button Command="{Binding DataContext.ExecuteProjectActionCommand, ElementName=RootPage}"
+                                                                CommandParameter="{Binding FirstAction}"
+                                                                HorizontalAlignment="Stretch"
+                                                                HorizontalContentAlignment="Left"
+                                                                Padding="6,4"
+                                                                Visibility="{Binding HasActions, Converter={StaticResource BoolToVisibilityConverter}}">
+                                                            <TextBlock Text="{Binding FirstNextAction}" FontSize="10"
+                                                                       Foreground="{StaticResource ArgusMutedTextBrush}"
+                                                                       TextTrimming="CharacterEllipsis" MaxLines="1" />
+                                                        </Button>
                                                     </StackPanel>
                                                 </Border>
                                             </DataTemplate>
@@ -330,12 +381,55 @@
                                                     VerticalAlignment="Center" />
                                             <TextBlock Text="NEXT ACTIONS" Style="{StaticResource PanelTitleStyle}" FontSize="14" />
                                         </StackPanel>
-                                        <Border HorizontalAlignment="Right" Padding="6,2" CornerRadius="4" Background="#2220EAF2">
-                                            <TextBlock Text="{Binding ProjectCockpit.GlobalNextActionCountText}"
-                                                       FontFamily="Cascadia Code" FontSize="10"
-                                                       Foreground="{StaticResource ArgusAccentBrush}" />
-                                        </Border>
+                                        <StackPanel HorizontalAlignment="Right"
+                                                    Orientation="Horizontal"
+                                                    Spacing="5">
+                                            <Button Content="{Binding ProjectProposalButtonText}"
+                                                    Command="{Binding GenerateProjectActionProposalsCommand}"
+                                                    FontSize="9"
+                                                    Padding="6,3"
+                                                    Visibility="{Binding IsProjectProposalBusy, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Invert}" />
+                                            <Button Content="Cancel proposals"
+                                                    Command="{Binding CancelProjectActionProposalsCommand}"
+                                                    FontSize="9"
+                                                    Padding="6,3"
+                                                    Visibility="{Binding IsProjectProposalBusy, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                            <Border Padding="6,2"
+                                                    CornerRadius="4"
+                                                    Background="#2220EAF2"
+                                                    VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding ProjectCockpit.GlobalNextActionCountText}"
+                                                           FontFamily="Cascadia Code" FontSize="10"
+                                                           Foreground="{StaticResource ArgusAccentBrush}" />
+                                            </Border>
+                                        </StackPanel>
                                     </Grid>
+                                    <Grid ColumnSpacing="8">
+                                        <TextBlock Text="{Binding ProjectActionStatusText}"
+                                                   Style="{StaticResource MetaTextStyle}"
+                                                   TextWrapping="WrapWholeWords" />
+                                        <StackPanel HorizontalAlignment="Right"
+                                                    Orientation="Horizontal"
+                                                    Spacing="4">
+                                            <ProgressRing Width="18"
+                                                          Height="18"
+                                                          IsActive="{Binding IsProjectProposalBusy}"
+                                                          Visibility="{Binding IsProjectProposalBusy, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                            <ProgressRing Width="18"
+                                                          Height="18"
+                                                          IsActive="{Binding IsProjectActionBusy}"
+                                                          Visibility="{Binding IsProjectActionBusy, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <TextBlock Text="Generate proposals sends the redacted project preview and any redacted project instructions to the selected AI provider. Nothing is changed without review."
+                                               FontSize="9"
+                                               Foreground="{StaticResource ArgusMutedTextBrush}"
+                                               TextWrapping="WrapWholeWords" />
+                                    <TextBlock Text="{Binding ProjectProposalErrorText}"
+                                               FontSize="10"
+                                               Foreground="{StaticResource ArgusAmberBrush}"
+                                               TextWrapping="WrapWholeWords"
+                                               Visibility="{Binding HasProjectProposalError, Converter={StaticResource BoolToVisibilityConverter}}" />
                                     <ItemsControl ItemsSource="{Binding ProjectCockpit.GlobalNextActions}">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
@@ -343,17 +437,57 @@
                                                         Background="#110A1222"
                                                         BorderBrush="{StaticResource ArgusMutedBorderBrush}"
                                                         BorderThickness="1">
-                                                    <Grid ColumnSpacing="8">
+                                                    <Grid ColumnSpacing="8" RowSpacing="4">
                                                         <Grid.ColumnDefinitions>
                                                             <ColumnDefinition Width="Auto" />
                                                             <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
                                                         </Grid.ColumnDefinitions>
                                                         <FontIcon Glyph="&#xE73E;" FontSize="11"
                                                                   Foreground="{StaticResource ArgusAccentBrush}"
                                                                   VerticalAlignment="Top" Margin="0,2,0,0" />
-                                                        <TextBlock Grid.Column="1" Text="{Binding}" FontSize="11"
-                                                                   Foreground="{StaticResource ArgusTextBrush}"
-                                                                   TextWrapping="WrapWholeWords" />
+                                                        <StackPanel Grid.Column="1" Spacing="2">
+                                                            <TextBlock Text="{Binding Title}" FontSize="11"
+                                                                       FontWeight="SemiBold"
+                                                                       Foreground="{StaticResource ArgusTextBrush}"
+                                                                       TextWrapping="WrapWholeWords" />
+                                                            <TextBlock Text="{Binding ProjectTitle}" FontSize="9"
+                                                                       FontFamily="Cascadia Code"
+                                                                       Foreground="{StaticResource ArgusAccentBrush}" />
+                                                            <StackPanel Orientation="Horizontal" Spacing="5">
+                                                                <Border Padding="4,1" CornerRadius="3" Background="#2210F7FF">
+                                                                    <TextBlock Text="{Binding UrgencyText}" FontSize="8"
+                                                                               FontFamily="Cascadia Code"
+                                                                               Foreground="{StaticResource ArgusAccentBrush}" />
+                                                                </Border>
+                                                                <Border Padding="4,1" CornerRadius="3" Background="#22AA60FF">
+                                                                    <TextBlock Text="{Binding SourceLabel}" FontSize="8"
+                                                                               FontFamily="Cascadia Code"
+                                                                               Foreground="{StaticResource ArgusVioletBrush}" />
+                                                                </Border>
+                                                            </StackPanel>
+                                                            <TextBlock Text="{Binding Explanation}" FontSize="10"
+                                                                       Foreground="{StaticResource ArgusMutedTextBrush}"
+                                                                       TextWrapping="WrapWholeWords" />
+                                                        </StackPanel>
+                                                        <StackPanel Grid.Column="2" Spacing="4" VerticalAlignment="Center">
+                                                            <Button Content="{Binding CommandLabel}"
+                                                                    Command="{Binding DataContext.ExecuteProjectActionCommand, ElementName=RootPage}"
+                                                                    CommandParameter="{Binding}"
+                                                                    HorizontalAlignment="Stretch" />
+                                                            <StackPanel Orientation="Horizontal" Spacing="3">
+                                                                <Button Content="Snooze"
+                                                                        FontSize="9"
+                                                                        Padding="5,2"
+                                                                        Command="{Binding DataContext.SnoozeProjectActionCommand, ElementName=RootPage}"
+                                                                        CommandParameter="{Binding}" />
+                                                                <Button Content="Dismiss"
+                                                                        FontSize="9"
+                                                                        Padding="5,2"
+                                                                        Command="{Binding DataContext.DismissProjectActionCommand, ElementName=RootPage}"
+                                                                        CommandParameter="{Binding}" />
+                                                            </StackPanel>
+                                                        </StackPanel>
                                                     </Grid>
                                                 </Border>
                                             </DataTemplate>
@@ -1047,6 +1181,22 @@
                             </StackPanel>
                         </Border>
 
+                        <TextBlock Text="LOCAL DIAGNOSTICS" Style="{StaticResource PanelTitleStyle}" FontSize="18" Margin="0,12,0,0" />
+                        <Border Padding="14" CornerRadius="8" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource ArgusMutedBorderBrush}" BorderThickness="1">
+                            <StackPanel Spacing="8">
+                                <TextBlock Text="Argus keeps redacted rolling logs on this PC. Diagnostics are never uploaded."
+                                           Style="{StaticResource MetaTextStyle}"
+                                           TextWrapping="WrapWholeWords" />
+                                <TextBlock Text="{Binding DiagnosticsPathDisplay}"
+                                           FontSize="11"
+                                           FontFamily="Cascadia Code"
+                                           TextWrapping="WrapWholeWords" />
+                                <Button Content="Open diagnostics folder"
+                                        Command="{Binding OpenDiagnosticsFolderCommand}"
+                                        HorizontalAlignment="Left" />
+                            </StackPanel>
+                        </Border>
+
                         <TextBlock Text="DATABASE MAINTENANCE" Style="{StaticResource PanelTitleStyle}" FontSize="18" Margin="0,12,0,0" />
                         <Border Padding="14" CornerRadius="8" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource ArgusMutedBorderBrush}" BorderThickness="1">
                             <StackPanel Spacing="10">
@@ -1135,6 +1285,22 @@
                     </StackPanel>
                     <TextBlock Text="Project Context" Style="{StaticResource PanelTitleStyle}" FontSize="15" />
                     <TextBlock Text="{Binding ProjectContextText}" Style="{StaticResource MetaTextStyle}" TextWrapping="WrapWholeWords" />
+                    <StackPanel Spacing="6"
+                                Visibility="{Binding IsSelectedNodeProject, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <Grid Margin="0,8,0,0">
+                            <TextBlock Text="PROJECT INSTRUCTIONS"
+                                       Style="{StaticResource PanelTitleStyle}"
+                                       FontSize="15"
+                                       VerticalAlignment="Center" />
+                            <Button Content="Edit"
+                                    HorizontalAlignment="Right"
+                                    Command="{Binding EditProjectInstructionsCommand}"
+                                    CommandParameter="{Binding SelectedNode}" />
+                        </Grid>
+                        <TextBlock Text="{Binding ProjectInstructionSummaryText}"
+                                   Style="{StaticResource MetaTextStyle}"
+                                   TextWrapping="WrapWholeWords" />
+                    </StackPanel>
                     <StackPanel Spacing="8" Visibility="{Binding CurrentView, Converter={StaticResource ViewVisibilityConverter}, ConverterParameter=Graph}">
                         <TextBlock Text="MOST CONNECTED" Style="{StaticResource PanelTitleStyle}" FontSize="15" Margin="0,8,0,0" />
                         <ListView ItemsSource="{Binding Dashboard.MostConnectedNodes}" SelectedItem="{Binding SelectedNode, Mode=TwoWay}" Style="{StaticResource DashboardListViewStyle}" MaxHeight="220">

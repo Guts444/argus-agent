@@ -47,6 +47,11 @@ public partial class App : Application
     {
         InitializeComponent();
         Services = ConfigureServices();
+        AttachGlobalExceptionHandlers();
+        GetDiagnostics()?.Write(
+            DiagnosticSeverity.Information,
+            "application",
+            "process.started");
     }
 
     /// <summary>
@@ -55,9 +60,24 @@ public partial class App : Application
     /// <param name="args">Details about the launch request and process.</param>
     protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
-        Window = new MainWindow();
-        DispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
-        Window.Activate();
+        using var operation = GetDiagnostics()?.BeginOperation(
+            "application",
+            "launch");
+        try
+        {
+            Window = new MainWindow();
+            DispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+            Window.Activate();
+        }
+        catch (Exception ex)
+        {
+            GetDiagnostics()?.Write(
+                DiagnosticSeverity.Critical,
+                "application",
+                "launch.failed",
+                exception: ex);
+            throw;
+        }
     }
 
     private static IServiceProvider ConfigureServices()
@@ -68,6 +88,12 @@ public partial class App : Application
 #else
         services.AddArgusData(ArgusDataPaths.GetDefaultDatabasePath());
 #endif
+        services.AddSingleton<IDiagnosticLog>(provider =>
+        {
+            var location = provider.GetRequiredService<ArgusDatabaseLocation>();
+            return new LocalDiagnosticLog(
+                Path.Combine(location.DataDirectory, "Diagnostics"));
+        });
         services.AddSingleton<ISecretStore, WindowsSecretStore>();
         services.AddSingleton(new HttpClient());
         services.AddSingleton<IOpenAiCodexService, CodexAppServerService>();
@@ -82,11 +108,15 @@ public partial class App : Application
             provider.GetRequiredService<AiProviderRouter>());
         services.AddSingleton<IToolService, ToolService>();
         services.AddSingleton<IToolApprovalService, ToolApprovalService>();
+        services.AddSingleton<IProjectActionReviewService, ProjectActionReviewService>();
+        services.AddSingleton<ProjectInstructionEditorService>();
+        services.AddSingleton<IProjectActionCoordinator, ProjectActionCoordinator>();
         services.AddSingleton<IAgentService, AgentService>();
         services.AddSingleton<ITelegramGatewayService, TelegramGatewayService>();
         services.AddSingleton<ISoulService, SoulService>();
         services.AddSingleton<IProjectContextService, ProjectContextService>();
         services.AddSingleton<IProjectDashboardService, ProjectDashboardService>();
+        services.AddSingleton<IProjectActionProposalService, ProjectActionProposalService>();
         services.AddSingleton<ISystemMonitorService, SystemMonitorService>();
         services.AddSingleton<IStockService, StockService>();
         services.AddSingleton<INewsService, NewsService>();
@@ -96,5 +126,41 @@ public partial class App : Application
         services.AddSingleton<MainPageViewModel>();
         services.AddSingleton<DashboardWidgetsViewModel>();
         return services.BuildServiceProvider();
+    }
+
+    private static IDiagnosticLog? GetDiagnostics()
+    {
+        return Services?.GetService<IDiagnosticLog>();
+    }
+
+    private void AttachGlobalExceptionHandlers()
+    {
+        UnhandledException += (_, eventArgs) =>
+        {
+            GetDiagnostics()?.Write(
+                DiagnosticSeverity.Critical,
+                "application",
+                "ui.unhandled_exception",
+                exception: eventArgs.Exception);
+        };
+
+        AppDomain.CurrentDomain.UnhandledException += (_, eventArgs) =>
+        {
+            GetDiagnostics()?.Write(
+                DiagnosticSeverity.Critical,
+                "application",
+                "appdomain.unhandled_exception",
+                $"terminating={eventArgs.IsTerminating}",
+                eventArgs.ExceptionObject as Exception);
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, eventArgs) =>
+        {
+            GetDiagnostics()?.Write(
+                DiagnosticSeverity.Error,
+                "application",
+                "task.unobserved_exception",
+                exception: eventArgs.Exception);
+        };
     }
 }

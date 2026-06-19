@@ -228,7 +228,11 @@ public interface IAgentService
 {
     Task<string> RunAsync(string instruction, CancellationToken cancellationToken = default);
     Task<AgentPlan> PlanAsync(string instruction, CancellationToken cancellationToken = default);
-    Task<(string FinalAnswer, string ExecutionLog)> RunWithDetailsAsync(string instruction, Guid? conversationId = null, CancellationToken cancellationToken = default);
+    Task<(string FinalAnswer, string ExecutionLog)> RunWithDetailsAsync(
+        string instruction,
+        Guid? conversationId = null,
+        CancellationToken cancellationToken = default,
+        Guid? projectId = null);
 }
 
 public sealed record AgentActionProposal(
@@ -346,6 +350,11 @@ public interface ISoulService
 
 public interface IProjectContextService
 {
+    ProjectContextSnapshot? CurrentSnapshot { get; }
+    bool IsRefreshing { get; }
+    Task<ProjectContextSnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default);
+    Task<ProjectContextSnapshot> RefreshSnapshotAsync(CancellationToken cancellationToken = default);
+    void CancelRefresh();
     Task<IReadOnlyList<ProjectContext>> ScanProjectsAsync(CancellationToken cancellationToken = default);
     Task<ProjectContext?> GetProjectContextAsync(string nodeTitle, CancellationToken cancellationToken = default);
 }

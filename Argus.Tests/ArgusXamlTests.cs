@@ -124,6 +124,122 @@ public sealed class ArgusXamlTests
         Assert.NotSame(cockpitWidget, actionsWidget);
     }
 
+    [Fact]
+    public void ProjectActionsAndDiagnosticsAreConnectedToCommands()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var mainPagePath = Path.Combine(repositoryRoot, "Argus.App", "MainPage.xaml");
+        var document = XDocument.Load(mainPagePath);
+        var buttons = document
+            .Descendants()
+            .Where(element => element.Name.LocalName == "Button")
+            .ToArray();
+
+        Assert.Contains(
+            buttons,
+            button => string.Equals(
+                (string?)button.Attribute("Command"),
+                "{Binding DataContext.ExecuteProjectActionCommand, ElementName=RootPage}",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            buttons,
+            button => string.Equals(
+                (string?)button.Attribute("Command"),
+                "{Binding DataContext.SnoozeProjectActionCommand, ElementName=RootPage}",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            buttons,
+            button => string.Equals(
+                (string?)button.Attribute("Command"),
+                "{Binding DataContext.DismissProjectActionCommand, ElementName=RootPage}",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            buttons,
+            button => string.Equals(
+                (string?)button.Attribute("Command"),
+                "{Binding GenerateProjectActionProposalsCommand}",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            buttons,
+            button =>
+                string.Equals(
+                    (string?)button.Attribute("Content"),
+                    "Cancel proposals",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)button.Attribute("Command"),
+                    "{Binding CancelProjectActionProposalsCommand}",
+                    StringComparison.Ordinal));
+        Assert.Contains(
+            buttons,
+            button =>
+                string.Equals(
+                    (string?)button.Attribute("Content"),
+                    "Restore hidden",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)button.Attribute("Command"),
+                    "{Binding RestoreProjectRecommendationsCommand}",
+                    StringComparison.Ordinal));
+        Assert.Contains(
+            buttons,
+            button =>
+                string.Equals(
+                    (string?)button.Attribute("Content"),
+                    "Open diagnostics folder",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)button.Attribute("Command"),
+                    "{Binding OpenDiagnosticsFolderCommand}",
+                    StringComparison.Ordinal));
+        Assert.Contains(
+            buttons,
+            button =>
+                string.Equals(
+                    (string?)button.Attribute("Content"),
+                    "Instructions",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)button.Attribute("Command"),
+                    "{Binding DataContext.EditProjectInstructionsCommand, ElementName=RootPage}",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)button.Attribute("CommandParameter"),
+                    "{Binding ProjectNode}",
+                    StringComparison.Ordinal));
+        Assert.Contains(
+            buttons,
+            button =>
+                string.Equals(
+                    (string?)button.Attribute("Content"),
+                    "Edit",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)button.Attribute("Command"),
+                    "{Binding EditProjectInstructionsCommand}",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)button.Attribute("CommandParameter"),
+                    "{Binding SelectedNode}",
+                    StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ReleaseBuildRunsFreshAndExistingPackagedSmokeScenarios()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var buildRelease = File.ReadAllText(
+            Path.Combine(repositoryRoot, "scripts", "build-release.ps1"));
+        var smokeScript = File.ReadAllText(
+            Path.Combine(repositoryRoot, "scripts", "test-packaged-app.ps1"));
+
+        Assert.Contains("test-packaged-app.ps1", buildRelease);
+        Assert.Contains("Invoke-ArgusSmokeScenario -Scenario \"fresh\"", smokeScript);
+        Assert.Contains("Invoke-ArgusSmokeScenario -Scenario \"existing\"", smokeScript);
+        Assert.Contains("fresh:onboarding-ready", smokeScript);
+        Assert.Contains("existing:dashboard-ready", smokeScript);
+    }
+
     private static XElement? FindDashboardWidgetAncestor(XElement element)
     {
         return element

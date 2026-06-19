@@ -1,4 +1,5 @@
 using Argus.AI.Services;
+using Argus.App.Services;
 using Argus.Core.Models;
 using Argus.Core.Services;
 using Argus.Data.Services;
@@ -20,6 +21,7 @@ public sealed partial class StartupPage : Page
     private readonly ISecretStore secretStore;
     private readonly IAiProviderRegistry aiProviderRegistry;
     private readonly IOpenAiCodexService? openAiCodexService;
+    private readonly IDiagnosticLog diagnosticLog;
     private bool isRunning;
     private bool telegramStarted;
 
@@ -37,6 +39,7 @@ public sealed partial class StartupPage : Page
         secretStore = App.Services.GetRequiredService<ISecretStore>();
         aiProviderRegistry = App.Services.GetRequiredService<IAiProviderRegistry>();
         openAiCodexService = App.Services.GetService<IOpenAiCodexService>();
+        diagnosticLog = App.Services.GetRequiredService<IDiagnosticLog>();
         InitializeComponent();
         Loaded += StartupPage_OnLoaded;
     }
@@ -65,10 +68,17 @@ public sealed partial class StartupPage : Page
         {
             StartupStatusText.Text = update.Status;
             StartupDetailText.Text = update.Detail;
+            diagnosticLog.Write(
+                DiagnosticSeverity.Information,
+                "startup",
+                $"phase.{update.Status}");
         });
 
         try
         {
+            using var startupOperation = diagnosticLog.BeginOperation(
+                "startup",
+                "workspace_prepare");
             var result = await startupService.StartAsync(progress);
             StartupStatusText.Text = "Workspace ready";
             StartupDetailText.Text = result.Backup.Created
@@ -78,7 +88,20 @@ public sealed partial class StartupPage : Page
 
             // Check if this is a first run (no SetupCompleted marker)
             var setupCompleted = await settingsService.GetSettingAsync("SetupCompleted");
+            if (PackagedSmokeTest.IsScenario("existing") &&
+                string.IsNullOrWhiteSpace(setupCompleted))
+            {
+                setupCompleted = DateTimeOffset.UtcNow.ToString("O");
+                await settingsService.SaveSettingAsync(
+                    "SetupCompleted",
+                    setupCompleted);
+            }
+
             isFirstRun = string.IsNullOrWhiteSpace(setupCompleted);
+            diagnosticLog.Write(
+                DiagnosticSeverity.Information,
+                "startup",
+                isFirstRun ? "mode.first_run" : "mode.existing_database");
 
             if (isFirstRun)
             {
@@ -88,6 +111,7 @@ public sealed partial class StartupPage : Page
                 StartupSubtitleText.Text = "FIRST-RUN SETUP";
                 FooterText.Text = "You can change these settings later. Choose at least a provider to get started.";
                 await InitializeWizardAsync();
+                PackagedSmokeTest.Complete("onboarding-ready");
             }
             else
             {
@@ -96,6 +120,11 @@ public sealed partial class StartupPage : Page
         }
         catch (Exception ex)
         {
+            diagnosticLog.Write(
+                DiagnosticSeverity.Error,
+                "startup",
+                "workspace_prepare.failed",
+                exception: ex);
             StartupProgressRing.IsActive = false;
             StartupStatusText.Text = "Argus could not open the workspace";
             StartupDetailText.Text = ex.Message;
@@ -117,7 +146,10 @@ public sealed partial class StartupPage : Page
         if (!telegramStarted)
         {
             telegramStarted = true;
-            _ = App.Services.GetRequiredService<ITelegramGatewayService>().StartAsync();
+            if (!PackagedSmokeTest.IsActive)
+            {
+                _ = App.Services.GetRequiredService<ITelegramGatewayService>().StartAsync();
+            }
         }
     }
 
@@ -301,6 +333,11 @@ public sealed partial class StartupPage : Page
         }
         catch (Exception ex)
         {
+            diagnosticLog.Write(
+                DiagnosticSeverity.Error,
+                "startup",
+                "codex_login.failed",
+                exception: ex);
             CodexStatusText.Text = $"Sign-in failed: {ex.Message}. Make sure the Codex CLI is installed (npm install -g @openai/codex) and retry.";
             CodexLoginButton.IsEnabled = true;
         }
@@ -509,6 +546,11 @@ public sealed partial class StartupPage : Page
         }
         catch (Exception ex)
         {
+            diagnosticLog.Write(
+                DiagnosticSeverity.Error,
+                "startup",
+                "backup_restore.failed",
+                exception: ex);
             StartupProgressRing.IsActive = false;
             StartupStatusText.Text = "Backup restore failed";
             StartupDetailText.Text = ex.Message;
@@ -535,6 +577,29 @@ public sealed partial class StartupPage : Page
         {
             StartupStatusText.Text = "Could not open the data folder";
             StartupDetailText.Text = ex.Message;
+        }
+    }
+
+    private async void OpenDiagnosticsFolderButton_OnClick(
+        object sender,
+        RoutedEventArgs e)
+    {
+        try
+        {
+            var folder = await StorageFolder.GetFolderFromPathAsync(
+                diagnosticLog.DiagnosticsDirectory);
+            await Launcher.LaunchFolderAsync(folder);
+        }
+        catch (Exception ex)
+        {
+            diagnosticLog.Write(
+                DiagnosticSeverity.Error,
+                "startup",
+                "diagnostics_folder.open_failed",
+                exception: ex);
+            StartupStatusText.Text = "Could not open diagnostics";
+            StartupDetailText.Text =
+                "The diagnostics folder could not be opened. Retry or inspect the local data folder.";
         }
     }
 
